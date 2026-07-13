@@ -3,54 +3,36 @@
 #include <stdio.h>
 #include <fstream>
 #include <iomanip>
+#include <string>
 
 #pragma comment (lib, "Psapi.lib")
 
 #include "Pointer.hpp"
 
-// Logging version - will dump memory patterns to a file for analysis
+// Logging version - will find CastSpellByName reference and dump surrounding code
 const unsigned char NewBytes[] = { 0xEB, 0x10 };
 
-// Search for sequences containing "74 10" (the conditional jump we're looking for)
-void SearchForJumps(void* StartAddressVoid, unsigned int MaxLength, const char* LogFile)
+// Search for a specific byte pattern
+pointer FindPatternSimple(void* StartAddressVoid, unsigned int MaxLength, const unsigned char* Bytes, unsigned int BytesLen)
 {
 	DWORD StartAddress = reinterpret_cast<DWORD>(StartAddressVoid);
-	std::ofstream log(LogFile, std::ios::app);
-	log << "=== Scanning for '74 10' conditional jumps ===" << std::endl;
-	log << "Start Address: 0x" << std::hex << StartAddress << std::dec << std::endl;
-	log << "Max Length: " << MaxLength << " bytes" << std::endl;
-	log << std::endl;
-
-	int matches = 0;
-	for (unsigned int i = 0; i < MaxLength - 1; i++)
+	for (unsigned int i = 0; i < MaxLength - BytesLen; i++)
 	{
-		unsigned char* ptr = reinterpret_cast<unsigned char*>(StartAddress + static_cast<DWORD>(i));
-		if (ptr[0] == 0x74 && ptr[1] == 0x10)
+		bool match = true;
+		for (unsigned int j = 0; j < BytesLen; j++)
 		{
-			matches++;
-			if (matches <= 50) // Log first 50 matches to avoid huge files
+			if (reinterpret_cast<unsigned char*>(StartAddress + i)[j] != Bytes[j])
 			{
-				log << "Match #" << matches << " at offset 0x" << std::hex << i << std::dec << std::endl;
-				log << "  Context (32 bytes before and after):" << std::endl;
-				log << "  ";
-				
-				// Print 32 bytes before and 32 bytes after
-				int start = (i >= 32) ? i - 32 : 0;
-				for (int j = start; j < i + 2 + 32 && j < (int)MaxLength; j++)
-				{
-					unsigned char byte = reinterpret_cast<unsigned char*>(StartAddress + static_cast<DWORD>(j))[0];
-					if (j == (int)i) log << "[";
-					log << std::hex << std::setfill('0') << std::setw(2) << (int)byte << " ";
-					if (j == (int)i + 1) log << "]";
-				}
-				log << std::dec << std::endl << std::endl;
+				match = false;
+				break;
 			}
 		}
+		if (match)
+		{
+			return pointer(StartAddress + i);
+		}
 	}
-
-	log << "Total '74 10' matches found: " << matches << std::endl;
-	log << std::endl << std::endl;
-	log.close();
+	return nullptr;
 }
 
 int __stdcall DllMain(void* Module, unsigned long Reason, void*)
@@ -63,7 +45,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream log(LogFile);
-	log << "=== WoW 3.3.5a Lua Unlocker - Memory Analysis ===" << std::endl;
+	log << "=== WoW 3.3.5a Lua Unlocker - Finding CastSpellByName Security Check ===" << std::endl;
 	log << "DLL Injected at: ";
 	SYSTEMTIME st;
 	GetLocalTime(&st);
@@ -76,31 +58,50 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	std::ofstream log2(LogFile, std::ios::app);
 	log2 << "WoW Module Info:" << std::endl;
 	log2 << "  Base Address: 0x" << std::hex << reinterpret_cast<DWORD>(WoWModuleInfo.lpBaseOfDll) << std::dec << std::endl;
-	log2 << "  Module Size: " << WoWModuleInfo.SizeOfImage << " bytes (0x" << std::hex << WoWModuleInfo.SizeOfImage << std::dec << ")" << std::endl;
+	log2 << "  Module Size: " << WoWModuleInfo.SizeOfImage << " bytes" << std::endl;
 	log2 << std::endl;
+
+	// Search for "CastSpellByName" string
+	log2 << "=== Searching for 'CastSpellByName' string ===" << std::endl;
+	const unsigned char CastSpellByNamePattern[] = { 'C', 'a', 's', 't', 'S', 'p', 'e', 'l', 'l', 'B', 'y', 'N', 'a', 'm', 'e' };
+	pointer castSpellRef = FindPatternSimple(WoWModuleInfo.lpBaseOfDll, WoWModuleInfo.SizeOfImage, CastSpellByNamePattern, sizeof(CastSpellByNamePattern));
+
+	if (castSpellRef != nullptr)
+	{
+		DWORD castSpellAddr = reinterpret_cast<DWORD>(static_cast<void*>(castSpellRef));
+		DWORD baseAddr = reinterpret_cast<DWORD>(WoWModuleInfo.lpBaseOfDll);
+		DWORD offset = castSpellAddr - baseAddr;
+
+		log2 << "Found 'CastSpellByName' at address: 0x" << std::hex << castSpellAddr << std::dec << std::endl;
+		log2 << "Offset from base: 0x" << std::hex << offset << std::dec << std::endl;
+		log2 << std::endl;
+
+		// Dump 512 bytes before and after for analysis
+		log2 << "=== Context around CastSpellByName (512 bytes before and after) ===" << std::endl;
+		int start = (offset >= 512) ? offset - 512 : 0;
+		int end = (offset + 512 + 15 < WoWModuleInfo.SizeOfImage) ? offset + 512 + 15 : WoWModuleInfo.SizeOfImage;
+
+		for (int i = start; i < end; i++)
+		{
+			unsigned char byte = reinterpret_cast<unsigned char*>(baseAddr + i)[0];
+			if (i == offset) log2 << "[";
+			log2 << std::hex << std::setfill('0') << std::setw(2) << (int)byte << " ";
+			if (i == offset + 14) log2 << "]";
+			
+			if ((i - start + 1) % 16 == 0)
+				log2 << std::endl;
+		}
+		log2 << std::dec << std::endl << std::endl;
+	}
+	else
+	{
+		log2 << "ERROR: Could not find 'CastSpellByName' string in memory!" << std::endl;
+	}
+
 	log2.close();
 
-	// Search for all "74 10" patterns in memory
-	SearchForJumps(WoWModuleInfo.lpBaseOfDll, WoWModuleInfo.SizeOfImage, LogFile);
-
-	// Try the original pattern just in case
-	std::ofstream log3(LogFile, std::ios::app);
-	log3 << "=== Testing Original Pattern ===" << std::endl;
-	log3 << "Pattern: 56 8B F1 8B 0D ? ? ? ? 8B 11 FF 92 ? ? ? ? 84 C0 74 10" << std::endl;
-	log3 << "Result: Pattern NOT FOUND (this is why the unlocker failed)" << std::endl;
-	log3 << std::endl;
-	log3 << "Analysis:" << std::endl;
-	log3 << "The pattern bytes do not exist in this WoW 3.3.5a build." << std::endl;
-	log3 << "This could mean:" << std::endl;
-	log3 << "1. Different WoW 3.3.5a patch version" << std::endl;
-	log3 << "2. Different compiler optimization flags" << std::endl;
-	log3 << "3. The function is in a different location" << std::endl;
-	log3 << std::endl;
-	log3 << "Check the '74 10' matches above to find the correct pattern context." << std::endl;
-	log3.close();
-
 	MessageBox(FindWindow(L"GxWindowClass", L"World of Warcraft"), 
-		L"Logging complete! Check C:\\WoW_Lua_Unlocker_Log.txt for memory analysis.", 
+		L"CastSpellByName search complete! Check C:\\WoW_Lua_Unlocker_Log.txt", 
 		L"Debug Mode", MB_OK);
 
 	return 1;
