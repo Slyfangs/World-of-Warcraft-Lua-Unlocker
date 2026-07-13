@@ -19,7 +19,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a Lua Unlocker - Analyzing Original CastSpellByName Function ===" << std::endl;
+	logStream << "=== WoW 3.3.5a Lua Unlocker - Patching Security Checks ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -30,118 +30,71 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
 	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	// The original CastSpellByName function
-	DWORD originalFuncAddr = 0x540310;
+	DWORD funcAddr = 0x540310;
 
-	logStream << "Original CastSpellByName function at: 0x" << std::hex << originalFuncAddr << std::endl;
-	logStream << "Dumping first 256 bytes of function..." << std::endl << std::endl;
+	logStream << "Target function: 0x" << std::hex << funcAddr << std::endl;
+	logStream << "Patching security check jumps..." << std::endl << std::endl;
 
-	for (int i = 0; i < 256; i += 16)
+	// Enable write access
+	DWORD oldProtect = 0;
+	if (!VirtualProtect((void*)funcAddr, 512, PAGE_EXECUTE_READWRITE, &oldProtect))
 	{
-		logStream << "0x" << std::hex << std::setfill('0') << std::setw(8) << (originalFuncAddr + i) << ": ";
-		for (int j = 0; j < 16; j++)
-		{
-			BYTE b = *(BYTE*)(originalFuncAddr + i + j);
-			logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
-		}
-		logStream << "| ";
-		for (int j = 0; j < 16; j++)
-		{
-			BYTE b = *(BYTE*)(originalFuncAddr + i + j);
-			logStream << (isprint(b) ? (char)b : '.');
-		}
-		logStream << std::endl;
+		logStream << "ERROR: Failed to change memory protection!" << std::endl;
+		logStream.close();
+		MessageBox(nullptr, L"ERROR: Could not modify memory!", L"Error", MB_OK);
+		return 1;
 	}
 
-	logStream << std::endl << "=== Looking for strings referenced by this function ===" << std::endl;
+	logStream << "Memory protection changed to READWRITE" << std::endl << std::endl;
 
-	// Search for string references in the function
-	for (int i = 0; i < 256; i += 4)
-	{
-		DWORD* pAddr = (DWORD*)(originalFuncAddr + i);
-		DWORD addr = *pAddr;
+	// Patch 1: At offset 0x2A (0x54032A) - JNE instruction that blocks the spell
+	// Original: 75 15 (JNE 0x15)
+	// Patch: 90 90 (NOP NOP) - just continue to the spell casting code
+	BYTE* pPatch1 = (BYTE*)(funcAddr + 0x2A);
+	logStream << "Patch #1 at offset 0x2A (0x" << std::hex << (funcAddr + 0x2A) << ")" << std::endl;
+	logStream << "  Before: " << std::hex << (int)pPatch1[0] << " " << (int)pPatch1[1] << std::endl;
+	pPatch1[0] = 0x90;  // NOP
+	pPatch1[1] = 0x90;  // NOP
+	logStream << "  After: " << std::hex << (int)pPatch1[0] << " " << (int)pPatch1[1] << std::endl << std::endl;
 
-		// Check if this looks like a string address (in data section around 0xa0xxxx)
-		if (addr >= 0xa00000 && addr <= 0xb00000)
-		{
-			logStream << "Potential string reference at offset 0x" << std::hex << i << ": 0x" << addr << std::endl;
-			
-			// Try to read the string
-			try
-			{
-				char* pStr = (char*)addr;
-				if (pStr && strlen(pStr) < 100)
-				{
-					logStream << "  String: \"" << pStr << "\"" << std::endl;
-				}
-			}
-			catch (...)
-			{
-				logStream << "  (Could not read string)" << std::endl;
-			}
-		}
-	}
+	// Patch 2: At offset 0x52 (0x540362) - Another TEST and long JE
+	// Original: 84 C0 0F 84 (TEST EAX, EAX; JE long offset)
+	// We need to skip this jump. Replace with NOPs
+	BYTE* pPatch2 = (BYTE*)(funcAddr + 0x52);
+	logStream << "Patch #2 at offset 0x52 (0x" << std::hex << (funcAddr + 0x52) << ")" << std::endl;
+	logStream << "  Before: ";
+	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch2[i] << " ";
+	logStream << std::endl;
+	// Replace "84 C0 0F 84 XX XX XX XX" with "90 90 90 90 90 90"
+	for (int i = 0; i < 6; i++) pPatch2[i] = 0x90;
+	logStream << "  After: ";
+	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch2[i] << " ";
+	logStream << std::endl << std::endl;
 
-	logStream << std::endl << "=== Searching for common patterns ===" << std::endl;
+	// Patch 3: At offset 0x74 (0x540384) - Another TEST and long JE
+	BYTE* pPatch3 = (BYTE*)(funcAddr + 0x74);
+	logStream << "Patch #3 at offset 0x74 (0x" << std::hex << (funcAddr + 0x74) << ")" << std::endl;
+	logStream << "  Before: ";
+	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch3[i] << " ";
+	logStream << std::endl;
+	// Replace "84 C0 0F 84 XX XX XX XX" with "90 90 90 90 90 90"
+	for (int i = 0; i < 6; i++) pPatch3[i] = 0x90;
+	logStream << "  After: ";
+	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch3[i] << " ";
+	logStream << std::endl << std::endl;
 
-	// Search for CMP instructions that might be security checks
-	BYTE* pFunc = (BYTE*)originalFuncAddr;
-	int cmpCount = 0;
+	// Restore protection
+	DWORD newProtect = 0;
+	VirtualProtect((void*)funcAddr, 512, oldProtect, &newProtect);
 
-	for (int i = 0; i < 256; i++)
-	{
-		// CMP EAX, 0x?? = 83 F8 ??
-		// CMP with immediate = 81 xx ?? ?? ?? ??
-		// TEST instruction = 85 xx, 84 xx
-		
-		if ((pFunc[i] == 0x83 && pFunc[i + 1] == 0xF8) ||  // CMP EAX, imm8
-			(pFunc[i] == 0x81 && (pFunc[i + 1] & 0x38) == 0x38) ||  // CMP r32, imm32
-			(pFunc[i] == 0x85) ||  // TEST r/m32, r32
-			(pFunc[i] == 0x84))    // TEST r/m8, r8
-		{
-			cmpCount++;
-			logStream << "Found comparison/test at offset 0x" << std::hex << i << ": ";
-			for (int j = 0; j < 6 && i + j < 256; j++)
-			{
-				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)pFunc[i + j] << " ";
-			}
-			logStream << std::endl;
-
-			if (cmpCount >= 5) break;
-		}
-	}
-
-	logStream << std::endl << "=== Looking for conditional jumps (JE, JNE, JZ, etc.) ===" << std::endl;
-
-	int jumpCount = 0;
-	for (int i = 0; i < 256; i++)
-	{
-		BYTE b = pFunc[i];
-		
-		// Short conditional jumps: 0x70-0x7F
-		// Long conditional jumps: 0x0F 0x80-0x8F
-		
-		if ((b >= 0x70 && b <= 0x7F) || (b == 0xEB))  // Short jumps
-		{
-			jumpCount++;
-			BYTE offset = pFunc[i + 1];
-			logStream << "Found jump at offset 0x" << std::hex << i << " (opcode 0x" << (int)b << "), target offset: 0x" << (int)offset << std::endl;
-
-			if (jumpCount >= 5) break;
-		}
-		else if (b == 0x0F && i + 1 < 256 && pFunc[i + 1] >= 0x80 && pFunc[i + 1] <= 0x8F)  // Long jumps
-		{
-			jumpCount++;
-			DWORD offset = *(DWORD*)(pFunc + i + 2);
-			logStream << "Found long jump at offset 0x" << std::hex << i << " (opcode 0x" << (int)pFunc[i + 1] << "), offset: 0x" << offset << std::endl;
-
-			if (jumpCount >= 5) break;
-		}
-	}
+	logStream << "Memory protection restored" << std::endl << std::endl;
+	logStream << "=== PATCHING COMPLETE ===" << std::endl;
+	logStream << "All security checks have been bypassed!" << std::endl;
+	logStream << "CastSpellByName should now work." << std::endl;
 
 	logStream.close();
 
-	MessageBox(nullptr, L"Function analysis complete. Check log.", L"Info", MB_OK);
+	MessageBox(nullptr, L"Security checks patched!\r\nTry: /run CastSpellByName(\"Demon Heart\")", L"Success", MB_OK);
 
 	return 1;
 }
