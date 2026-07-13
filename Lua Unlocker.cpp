@@ -6,9 +6,11 @@
 
 #include "Pointer.hpp"
 
-const unsigned char NewBytes[] = {0x8B, 0xE5, 0x5D, 0xC3};
-const unsigned char PatternBytes[] = {0x8B, 0x45, 0xDC, 0x8B, 0x4D, 0xF0, 0x5F, 0x5E, 0x5B};
-const char PatternMask[] = "xxxxxxxxx";
+// 3.3.5a Pattern: Bypasses the insecure function check for protected Lua functions
+// like CastSpellByName and CastSpellByID
+const unsigned char NewBytes[] = {0xEB, 0x10};
+const unsigned char PatternBytes[] = {0x56, 0x8B, 0xF1, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x11, 0xFF, 0x92, 0x00, 0x00, 0x00, 0x00, 0x84, 0xC0, 0x74, 0x10};
+const char PatternMask[] = "xxxxx????xxxx????xxxx";
 
 pointer FindPattern (pointer StartAddress, unsigned int MaxLength, const unsigned char* Bytes, const char* Mask)
 {
@@ -41,18 +43,21 @@ int __stdcall DllMain (void* Module, unsigned long Reason, void*)
 	MODULEINFO WoWModuleInfo;
 	GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &WoWModuleInfo, sizeof(MODULEINFO));
 	pointer PatchAddress = FindPattern(WoWModuleInfo.lpBaseOfDll, WoWModuleInfo.SizeOfImage, PatternBytes, PatternMask);
-	if(PatchAddress == nullptr || *reinterpret_cast<unsigned char*>(PatchAddress += 0x9) != 0x81)
+	if(PatchAddress == nullptr)
 	{
 		MessageBox(FindWindow("GxWindowClass", "World of Warcraft"), "Unable to find bytes to patch.", "Failure", MB_OK);
 		return 0;
 	}
 
-	unsigned long OldProtection = 0;
-	VirtualProtect(PatchAddress, 0x4, PAGE_EXECUTE_READWRITE, &OldProtection);
-	memcpy(PatchAddress, NewBytes, 0x4);
-	VirtualProtect(PatchAddress, 0x4, OldProtection, &OldProtection);
+	// Offset to the conditional jump (74 10) that needs to be patched
+	PatchAddress += 0x13;
 
-	if(memcmp(NewBytes, PatchAddress, 0x4) != 0)
+	unsigned long OldProtection = 0;
+	VirtualProtect(PatchAddress, 0x2, PAGE_EXECUTE_READWRITE, &OldProtection);
+	memcpy(PatchAddress, NewBytes, 0x2);
+	VirtualProtect(PatchAddress, 0x2, OldProtection, &OldProtection);
+
+	if(memcmp(NewBytes, PatchAddress, 0x2) != 0)
 	{
 		char* Message = new char[100];
 		ZeroMemory(Message, 100);
