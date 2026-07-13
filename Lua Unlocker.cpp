@@ -32,18 +32,18 @@ pointer FindPattern(pointer StartAddress, unsigned int MaxLength, const unsigned
 }
 
 // Search for sequences containing "74 10" (the conditional jump we're looking for)
-void SearchForJumps(pointer StartAddress, unsigned int MaxLength, const char* LogFile)
+void SearchForJumps(void* StartAddress, unsigned int MaxLength, const char* LogFile)
 {
 	std::ofstream log(LogFile, std::ios::app);
 	log << "=== Scanning for '74 10' conditional jumps ===" << std::endl;
-	log << "Start Address: 0x" << std::hex << reinterpret_cast<DWORD>(static_cast<void*>(StartAddress)) << std::dec << std::endl;
+	log << "Start Address: 0x" << std::hex << reinterpret_cast<DWORD>(StartAddress) << std::dec << std::endl;
 	log << "Max Length: " << MaxLength << " bytes" << std::endl;
 	log << std::endl;
 
 	int matches = 0;
 	for (unsigned int i = 0; i < MaxLength - 1; i++)
 	{
-		unsigned char* ptr = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(static_cast<void*>(StartAddress)) + i);
+		unsigned char* ptr = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(StartAddress) + i);
 		if (ptr[0] == 0x74 && ptr[1] == 0x10)
 		{
 			matches++;
@@ -53,14 +53,14 @@ void SearchForJumps(pointer StartAddress, unsigned int MaxLength, const char* Lo
 				log << "  Context (32 bytes before and after):" << std::endl;
 				log << "  ";
 				
-				// Print 32 bytes before
+				// Print 32 bytes before and 32 bytes after
 				int start = (i >= 32) ? i - 32 : 0;
-				for (int j = start; j < i + 2 + 32 && j < MaxLength; j++)
+				for (int j = start; j < i + 2 + 32 && j < (int)MaxLength; j++)
 				{
-					unsigned char byte = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(static_cast<void*>(StartAddress)) + j)[0];
-					if (j == i) log << "[";
-					log << std::hex << (int)byte << " ";
-					if (j == i + 1) log << "]";
+					unsigned char byte = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(StartAddress) + j)[0];
+					if (j == (int)i) log << "[";
+					log << std::hex << std::setfill('0') << std::setw(2) << (int)byte << " ";
+					if (j == (int)i + 1) log << "]";
 				}
 				log << std::dec << std::endl << std::endl;
 			}
@@ -100,14 +100,11 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	log2.close();
 
 	// Search for all "74 10" patterns in memory
-	pointer startPtr(WoWModuleInfo.lpBaseOfDll);
-	SearchForJumps(startPtr, WoWModuleInfo.SizeOfImage, LogFile);
+	SearchForJumps(WoWModuleInfo.lpBaseOfDll, WoWModuleInfo.SizeOfImage, LogFile);
 
 	// Try the original pattern just in case
 	std::ofstream log3(LogFile, std::ios::app);
 	log3 << "=== Testing Original Pattern ===" << std::endl;
-	const unsigned char PatternBytes[] = { 0x56, 0x8B, 0xF1, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x11, 0xFF, 0x92, 0x00, 0x00, 0x00, 0x00, 0x84, 0xC0, 0x74, 0x10 };
-	const char PatternMask[] = "xxxxx????xxxx????xxxx";
 	log3 << "Pattern: 56 8B F1 8B 0D ? ? ? ? 8B 11 FF 92 ? ? ? ? 84 C0 74 10" << std::endl;
 	log3 << "Result: Pattern NOT FOUND (this is why the unlocker failed)" << std::endl;
 	log3 << std::endl;
