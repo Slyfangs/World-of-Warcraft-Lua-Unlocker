@@ -28,21 +28,6 @@ public:
 		return;
 	}
 
-	inline void* operator + (void* Other)
-	{
-		return reinterpret_cast<void*>(reinterpret_cast<POINTERTYPE>(this->Address) + reinterpret_cast<POINTERTYPE>(Other));
-	}
-
-	inline void* operator + (unsigned int Other)
-	{
-		return reinterpret_cast<void*>(reinterpret_cast<POINTERTYPE>(this->Address) + Other);
-	}
-
-	inline void* operator += (void* Other)
-	{
-		return (this->Address = reinterpret_cast<void*>(reinterpret_cast<POINTERTYPE>(this->Address) + reinterpret_cast<POINTERTYPE>(Other)));
-	}
-
 	inline void* operator += (unsigned int Other)
 	{
 		return (this->Address = reinterpret_cast<void*>(reinterpret_cast<POINTERTYPE>(this->Address) + Other));
