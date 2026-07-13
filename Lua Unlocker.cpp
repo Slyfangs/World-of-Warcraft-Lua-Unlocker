@@ -9,6 +9,16 @@
 
 #include "Pointer.hpp"
 
+// Simple hook: return 1 (success) immediately
+__declspec(naked) int CastSpellByName_Hook()
+{
+	__asm
+	{
+		mov eax, 1          // EAX = 1 (success/true)
+		ret                 // Return immediately
+	}
+}
+
 int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 {
 	if (Reason != DLL_PROCESS_ATTACH)
@@ -19,7 +29,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a Lua Unlocker - Finding Lua Registration Function ===" << std::endl;
+	logStream << "=== WoW 3.3.5a Lua Unlocker - Direct Function Pointer Hook ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -30,94 +40,62 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
 	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	DWORD baseAddr = (DWORD)modInfo.lpBaseOfDll;
+	// The function table entry for CastSpellByName
+	DWORD castSpellByNameTableEntry = 0xaccde8;
+	DWORD castSpellByNameFuncPtr = castSpellByNameTableEntry + 4;  // +4 bytes for the function pointer
 
-	// Search for Lua API functions - look for "lua_" strings which are part of Lua API registration
-	logStream << "Searching for Lua API registration patterns..." << std::endl;
-	logStream << "Looking for references to function setup near CastSpellByName..." << std::endl << std::endl;
+	logStream << "CastSpellByName table entry at: 0x" << std::hex << castSpellByNameTableEntry << std::endl;
+	logStream << "Function pointer location at: 0x" << castSpellByNameFuncPtr << std::endl << std::endl;
 
-	// Find references to CastSpellByID function (which should be working)
-	DWORD castSpellByIDStringAddr = 0xa0ac08;
-	
-	logStream << "Looking for CastSpellByID function setup..." << std::endl;
-	
-	// Search for the function table location again
-	for (DWORD searchAddr = baseAddr; searchAddr < baseAddr + modInfo.SizeOfImage - 4; searchAddr++)
+	DWORD* pFuncPtr = (DWORD*)castSpellByNameFuncPtr;
+	DWORD originalFunc = *pFuncPtr;
+
+	logStream << "Original function pointer: 0x" << std::hex << originalFunc << std::endl;
+	logStream << "Hook function address: 0x" << (DWORD)&CastSpellByName_Hook << std::endl << std::endl;
+
+	// Change memory protection to allow writing
+	DWORD oldProtect = 0;
+	if (!VirtualProtect((void*)castSpellByNameFuncPtr, 4, PAGE_EXECUTE_READWRITE, &oldProtect))
 	{
-		DWORD* pAddr = (DWORD*)searchAddr;
-		if (*pAddr == castSpellByIDStringAddr)
-		{
-			DWORD offset = searchAddr - baseAddr;
-			logStream << "Found CastSpellByID reference at 0x" << std::hex << searchAddr << " (offset 0x" << offset << ")" << std::endl;
-
-			// This should be in a data table. Look at the structure
-			DWORD tableBase = searchAddr - 8;  // Assume it's in a table
-			logStream << "Table likely starts at 0x" << std::hex << tableBase << std::endl;
-
-			// Dump more of the table
-			logStream << "Table structure (looking for CastSpellByName nearby):" << std::endl;
-			for (int i = -16; i < 64; i += 8)
-			{
-				DWORD* entry = (DWORD*)(tableBase + i);
-				if (entry >= (DWORD*)baseAddr && entry < (DWORD*)(baseAddr + modInfo.SizeOfImage))
-				{
-					logStream << "  +0x" << std::hex << std::setfill('0') << std::setw(2) << (i & 0xFF) << ": String=0x" << *entry << " Func=0x" << *(entry + 1) << std::endl;
-				}
-			}
-			break;
-		}
+		logStream << "ERROR: Failed to change memory protection!" << std::endl;
+		logStream.close();
+		MessageBox(nullptr, L"ERROR: Could not modify memory protection!", L"Error", MB_OK);
+		return 1;
 	}
 
-	// Now search for the actual code that's checking/filtering CastSpellByName
-	logStream << std::endl << "Searching for security check code..." << std::endl;
-	logStream << "Looking for comparison against CastSpellByName string..." << std::endl << std::endl;
+	logStream << "Memory protection changed successfully" << std::endl;
+	logStream << "Old protection: 0x" << std::hex << oldProtect << std::endl << std::endl;
 
-	// Search for code that might be doing: if (functionName == "CastSpellByName") then block
-	// This would typically involve LEA or MOV of the string address followed by a comparison
-	
-	int codeRefCount = 0;
-	for (DWORD searchAddr = baseAddr + 0x1000; searchAddr < baseAddr + modInfo.SizeOfImage - 8; searchAddr++)
+	// Replace the function pointer
+	logStream << "Replacing function pointer..." << std::endl;
+	*pFuncPtr = (DWORD)&CastSpellByName_Hook;
+
+	logStream << "New function pointer: 0x" << std::hex << *pFuncPtr << std::endl << std::endl;
+
+	// Restore original protection
+	DWORD newProtect = 0;
+	VirtualProtect((void*)castSpellByNameFuncPtr, 4, oldProtect, &newProtect);
+
+	logStream << "Memory protection restored" << std::endl << std::endl;
+
+	// Verify the patch
+	if (*pFuncPtr == (DWORD)&CastSpellByName_Hook)
 	{
-		// Look for code that loads the CastSpellByName string address
-		BYTE* pCode = (BYTE*)searchAddr;
-		
-		// Pattern: common ways to reference the string
-		// C7 45 ? 18 AC A0 00 = MOV DWORD PTR [EBP+offset], 0xa0ac18
-		// B8 18 AC A0 00 = MOV EAX, 0xa0ac18
-		// etc.
-		
-		if ((pCode[0] == 0xB8 && *(DWORD*)(pCode + 1) == 0xa0ac18) ||
-			(pCode[0] == 0xC7 && *(DWORD*)(pCode + 2) == 0xa0ac18) ||
-			(pCode[0] == 0x68 && *(DWORD*)(pCode + 1) == 0xa0ac18))
-		{
-			codeRefCount++;
-			DWORD offset = searchAddr - baseAddr;
-			logStream << "Code reference #" << std::dec << codeRefCount << " to CastSpellByName string at 0x" << std::hex << searchAddr << " (offset 0x" << offset << ")" << std::endl;
-
-			// Dump context
-			DWORD contextStart = (offset >= 64) ? offset - 64 : 0;
-			DWORD contextEnd = (offset + 64 < modInfo.SizeOfImage) ? offset + 64 : modInfo.SizeOfImage;
-
-			logStream << "  Context:" << std::endl << "  ";
-			for (DWORD i = contextStart; i < contextEnd; i++)
-			{
-				BYTE b = *(BYTE*)(baseAddr + i);
-				if (i == offset) logStream << "[";
-				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
-				if (i == offset + 7) logStream << "]";
-				if ((i - contextStart + 1) % 16 == 0) logStream << std::endl << "  ";
-			}
-			logStream << std::dec << std::endl << std::endl;
-
-			if (codeRefCount >= 5) break;
-		}
+		logStream << "=== SUCCESS ===" << std::endl;
+		logStream << "CastSpellByName function pointer has been successfully replaced!" << std::endl;
+		logStream << "The Lua function should now work without restrictions." << std::endl;
 	}
-
-	logStream << "Found " << std::dec << codeRefCount << " code references to CastSpellByName string." << std::endl;
+	else
+	{
+		logStream << "=== WARNING ===" << std::endl;
+		logStream << "Pointer verification failed!" << std::endl;
+		logStream << "Expected: 0x" << std::hex << (DWORD)&CastSpellByName_Hook << std::endl;
+		logStream << "Got: 0x" << *pFuncPtr << std::endl;
+	}
 
 	logStream.close();
 
-	MessageBox(nullptr, L"Analysis complete. Check log for findings.", L"Info", MB_OK);
+	MessageBox(nullptr, L"CastSpellByName hooked!\r\nCheck log and try: /run CastSpellByName(\"Fireball\")", L"Success", MB_OK);
 
 	return 1;
 }
