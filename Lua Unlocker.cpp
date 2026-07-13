@@ -9,26 +9,34 @@
 
 #include "Pointer.hpp"
 
-// The actual spell casting function that works
-// CastSpellByID is at 0x53e060 and it works
+// Lua state and related functions
+typedef void* lua_State;
+
+// Original CastSpellByName function at 0x540310
+typedef int(__stdcall *pCastSpellByName)(const char* spellName);
+
+// Function to call CastSpellByID which we know works
 typedef int(__stdcall *pCastSpellByID)(int spellID);
 
-// We need to find a way to convert spell name to spell ID
-// Or better: hook the actual spell casting
+pCastSpellByName OriginalCastSpellByName = (pCastSpellByName)0x540310;
+pCastSpellByID CastSpellByID = (pCastSpellByID)0x53e060;
 
-// Simple working version: just write assembly that calls CastSpellByID with a hardcoded spell ID
-__declspec(naked) int CastSpellByName_Hooked()
+// Hook function that properly calls the original
+__declspec(naked) int CastSpellByName_Hook()
 {
 	__asm
 	{
-		// EBP+8 = spell name string
 		push ebp
 		mov ebp, esp
 		
-		// For now, hardcode Demon Heart spell ID (assuming it exists)
-		// We need to find this ID first
-		// Let's just return 1 for testing
-		mov eax, 1
+		// EBP+8 = first parameter (spell name string from Lua)
+		mov eax, [ebp + 8]
+		
+		// Just call the original function directly with the spell name
+		// But we need to make sure the stack is set up correctly
+		push eax
+		call dword ptr [OriginalCastSpellByName]
+		add esp, 4
 		
 		pop ebp
 		ret
@@ -45,7 +53,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a Lua Unlocker - Finding Spell IDs ===" << std::endl;
+	logStream << "=== WoW 3.3.5a Lua Unlocker - Calling Original with Proper Setup ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -56,92 +64,74 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
 	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	// Search for "Demon Heart" string
-	logStream << "Searching for spell names in data section..." << std::endl;
+	DWORD funcAddr = 0x540310;
 
-	DWORD baseAddr = (DWORD)modInfo.lpBaseOfDll;
-	const char* targetSpell = "Demon Heart";
-	int spellRefCount = 0;
+	logStream << "Original CastSpellByName: 0x" << std::hex << funcAddr << std::endl;
+	logStream << "Working CastSpellByID: 0x53e060" << std::endl << std::endl;
 
-	for (DWORD searchAddr = baseAddr; searchAddr < baseAddr + modInfo.SizeOfImage - strlen(targetSpell); searchAddr++)
+	logStream << "The original function is trying to look up the spell by name." << std::endl;
+	logStream << "The problem: it's likely calling a lookup function that needs initialization." << std::endl << std::endl;
+
+	logStream << "New strategy: Find what function is being called at offset 0x1D" << std::endl;
+	logStream << "That CALL at 0x54031D is the spell name lookup." << std::endl;
+	logStream << "Let's hook that instead!" << std::endl << std::endl;
+
+	// The CALL at 0x54031D calls a lookup function
+	// Let's find what it is by looking at the instruction
+	BYTE* pCall = (BYTE*)(funcAddr + 0x1D);
+	logStream << "Instruction at 0x54031D: ";
+	for (int i = 0; i < 5; i++)
 	{
-		char* pStr = (char*)searchAddr;
-		if (strcmp(pStr, targetSpell) == 0)
-		{
-			DWORD offset = searchAddr - baseAddr;
-			logStream << "Found '" << targetSpell << "' at 0x" << std::hex << searchAddr << " (offset 0x" << offset << ")" << std::endl;
-			spellRefCount++;
+		logStream << std::hex << std::setfill('0') << std::setw(2) << (int)pCall[i] << " ";
+	}
+	logStream << std::endl;
 
-			// Now search for references to this address
-			logStream << "  Searching for references to this string..." << std::endl;
+	// E8 = CALL with relative offset
+	if (pCall[0] == 0xE8)
+	{
+		int relOffset = *(int*)(pCall + 1);
+		DWORD callTarget = (DWORD)(pCall + 5) + relOffset;  // EIP after CALL + offset
+		logStream << "CALL relative offset: 0x" << std::hex << (relOffset & 0xFFFFFFFF) << std::endl;
+		logStream << "CALL target: 0x" << callTarget << std::endl << std::endl;
 
-			for (DWORD refAddr = baseAddr; refAddr < baseAddr + modInfo.SizeOfImage - 4; refAddr++)
-			{
-				DWORD* pAddr = (DWORD*)refAddr;
-				if (*pAddr == searchAddr)
-				{
-					logStream << "    Reference at 0x" << std::hex << refAddr << " (offset 0x" << (refAddr - baseAddr) << ")" << std::endl;
-				}
-			}
-
-			if (spellRefCount >= 3) break;
-		}
+		logStream << "This is the spell name lookup function!" << std::endl;
+		logStream << "It takes: ESI = spell name string, EAX = some parameter (value 1)" << std::endl;
+		logStream << "It returns: EAX = spell ID (or 0 if not found)" << std::endl << std::endl;
 	}
 
-	logStream << std::endl << "Found " << std::dec << spellRefCount << " instances of spell name" << std::endl << std::endl;
+	logStream << "Strategy: We need to patch the CastSpellByName function to bypass the lookup" << std::endl;
+	logStream << "and instead use CastSpellByID directly with a test ID." << std::endl << std::endl;
 
-	// Now search for spell name to ID mapping
-	logStream << "Looking for spell ID lookup structures..." << std::endl;
-	logStream << "Searching for common spell data patterns..." << std::endl << std::endl;
+	// Enable write access
+	DWORD oldProtect = 0;
+	VirtualProtect((void*)funcAddr, 512, PAGE_EXECUTE_READWRITE, &oldProtect);
 
-	// In WoW, spell data is often stored in tables with name->ID mappings
-	// Let's search for the pattern: (string pointer, spell ID)
+	logStream << "Attempting to patch CastSpellByName to return 1 (success)..." << std::endl;
+	
+	// Replace entire function with a simple return 1
+	BYTE* pFunc = (BYTE*)funcAddr;
+	pFunc[0] = 0xB8;  // MOV EAX, 1
+	pFunc[1] = 0x01;
+	pFunc[2] = 0x00;
+	pFunc[3] = 0x00;
+	pFunc[4] = 0x00;
+	pFunc[5] = 0xC3;  // RET
 
-	for (DWORD searchAddr = baseAddr + 0x900000; searchAddr < baseAddr + modInfo.SizeOfImage - 8; searchAddr += 4)
-	{
-		DWORD* pEntry = (DWORD*)searchAddr;
-		DWORD strAddr = pEntry[0];
-		DWORD spellID = pEntry[1];
+	VirtualProtect((void*)funcAddr, 512, oldProtect, &newProtect);
 
-		// Check if first DWORD looks like a string address and second looks like a reasonable ID
-		if (strAddr >= baseAddr && strAddr < baseAddr + modInfo.SizeOfImage &&
-			spellID > 0 && spellID < 100000)
-		{
-			char* pStr = (char*)strAddr;
-			try
-			{
-				if (strlen(pStr) > 2 && strlen(pStr) < 50 && isalpha(pStr[0]))
-				{
-					// Check if this is a spell name
-					bool isSpellName = true;
-					for (int i = 0; i < strlen(pStr); i++)
-					{
-						if (!isalpha(pStr[i]) && !isspace(pStr[i]) && pStr[i] != '-' && pStr[i] != '\'')
-						{
-							isSpellName = false;
-							break;
-						}
-					}
+	logStream << "Patched. Now the function just returns 1." << std::endl;
+	logStream << "But this won't cast spells - it just prevents errors." << std::endl << std::endl;
 
-					if (isSpellName && strstr(pStr, "Demon") != NULL)
-					{
-						logStream << "Found potential spell entry at 0x" << std::hex << searchAddr << std::endl;
-						logStream << "  Name: \"" << pStr << "\"" << std::endl;
-						logStream << "  ID: " << std::dec << spellID << std::endl << std::endl;
-					}
-				}
-			}
-			catch (...)
-			{
-			}
-		}
-	}
+	logStream << "The real issue: We need game context (player object, etc) to cast spells." << std::endl;
+	logStream << "The original function is setting up that context." << std::endl;
+	logStream << "Skipping it causes crashes." << std::endl << std::endl;
 
-	logStream << "Analysis complete. Check spell IDs above." << std::endl;
+	logStream << "Solution: We need to find how CastSpellByID is called from chat commands." << std::endl;
+	logStream << "That code already has the proper context set up." << std::endl;
 
 	logStream.close();
 
-	MessageBox(nullptr, L"Spell search complete. Check log for spell IDs.", L"Info", MB_OK);
+	MessageBox(nullptr, L"Analysis complete. Trying different approach next.", L"Info", MB_OK);
 
 	return 1;
 }
