@@ -24,7 +24,7 @@ void SearchForJumps(void* StartAddressVoid, unsigned int MaxLength, const char* 
 	int matches = 0;
 	for (unsigned int i = 0; i < MaxLength - 1; i++)
 	{
-		unsigned char* ptr = reinterpret_cast<unsigned char*>(StartAddress + i);
+		unsigned char* ptr = reinterpret_cast<unsigned char*>(StartAddress + static_cast<DWORD>(i));
 		if (ptr[0] == 0x74 && ptr[1] == 0x10)
 		{
 			matches++;
@@ -38,7 +38,7 @@ void SearchForJumps(void* StartAddressVoid, unsigned int MaxLength, const char* 
 				int start = (i >= 32) ? i - 32 : 0;
 				for (int j = start; j < i + 2 + 32 && j < (int)MaxLength; j++)
 				{
-					unsigned char byte = reinterpret_cast<unsigned char*>(StartAddress + j)[0];
+					unsigned char byte = reinterpret_cast<unsigned char*>(StartAddress + static_cast<DWORD>(j))[0];
 					if (j == (int)i) log << "[";
 					log << std::hex << std::setfill('0') << std::setw(2) << (int)byte << " ";
 					if (j == (int)i + 1) log << "]";
