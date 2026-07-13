@@ -36,14 +36,14 @@ void SearchForJumps(pointer StartAddress, unsigned int MaxLength, const char* Lo
 {
 	std::ofstream log(LogFile, std::ios::app);
 	log << "=== Scanning for '74 10' conditional jumps ===" << std::endl;
-	log << "Start Address: 0x" << std::hex << (DWORD)StartAddress << std::dec << std::endl;
+	log << "Start Address: 0x" << std::hex << reinterpret_cast<DWORD>(static_cast<void*>(StartAddress)) << std::dec << std::endl;
 	log << "Max Length: " << MaxLength << " bytes" << std::endl;
 	log << std::endl;
 
 	int matches = 0;
 	for (unsigned int i = 0; i < MaxLength - 1; i++)
 	{
-		unsigned char* ptr = reinterpret_cast<unsigned char*>(StartAddress + i);
+		unsigned char* ptr = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(static_cast<void*>(StartAddress)) + i);
 		if (ptr[0] == 0x74 && ptr[1] == 0x10)
 		{
 			matches++;
@@ -57,7 +57,7 @@ void SearchForJumps(pointer StartAddress, unsigned int MaxLength, const char* Lo
 				int start = (i >= 32) ? i - 32 : 0;
 				for (int j = start; j < i + 2 + 32 && j < MaxLength; j++)
 				{
-					unsigned char byte = reinterpret_cast<unsigned char*>(StartAddress + j)[0];
+					unsigned char byte = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(static_cast<void*>(StartAddress)) + j)[0];
 					if (j == i) log << "[";
 					log << std::hex << (int)byte << " ";
 					if (j == i + 1) log << "]";
@@ -94,13 +94,14 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 
 	std::ofstream log2(LogFile, std::ios::app);
 	log2 << "WoW Module Info:" << std::endl;
-	log2 << "  Base Address: 0x" << std::hex << (DWORD)WoWModuleInfo.lpBaseOfDll << std::dec << std::endl;
+	log2 << "  Base Address: 0x" << std::hex << reinterpret_cast<DWORD>(WoWModuleInfo.lpBaseOfDll) << std::dec << std::endl;
 	log2 << "  Module Size: " << WoWModuleInfo.SizeOfImage << " bytes (0x" << std::hex << WoWModuleInfo.SizeOfImage << std::dec << ")" << std::endl;
 	log2 << std::endl;
 	log2.close();
 
 	// Search for all "74 10" patterns in memory
-	SearchForJumps(WoWModuleInfo.lpBaseOfDll, WoWModuleInfo.SizeOfImage, LogFile);
+	pointer startPtr(WoWModuleInfo.lpBaseOfDll);
+	SearchForJumps(startPtr, WoWModuleInfo.SizeOfImage, LogFile);
 
 	// Try the original pattern just in case
 	std::ofstream log3(LogFile, std::ios::app);
