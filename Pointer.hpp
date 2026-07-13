@@ -52,4 +52,9 @@ public:
 	{
 		return this->Address;
 	}
+
+	inline operator DWORD ()
+	{
+		return reinterpret_cast<DWORD>(this->Address);
+	}
 };
