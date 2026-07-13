@@ -9,20 +9,6 @@
 
 #include "Pointer.hpp"
 
-// Simple hook: just return success (0) without doing anything
-__declspec(naked) void CastSpellByName_Hook()
-{
-	__asm
-	{
-		xor eax, eax        // EAX = 0 (success)
-		ret                 // Return immediately
-	}
-}
-
-// Pointer to original function
-typedef int(__stdcall *pCastSpellByName)(const char* spellName);
-pCastSpellByName original_CastSpellByName = nullptr;
-
 int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 {
 	if (Reason != DLL_PROCESS_ATTACH)
@@ -33,7 +19,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a Lua Unlocker - Direct Function Hook ===" << std::endl;
+	logStream << "=== WoW 3.3.5a Lua Unlocker - Finding Lua Registration Function ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -44,51 +30,94 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
 	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	// The function reference we found was at 0xaccde8
-	// This points to a function (likely in the data section that contains function pointers)
-	DWORD funcRefAddr = 0xaccde8;
-	DWORD* pFuncRef = (DWORD*)funcRefAddr;
-	DWORD actualFuncAddr = *pFuncRef;
+	DWORD baseAddr = (DWORD)modInfo.lpBaseOfDll;
 
-	logStream << "Function reference at: 0x" << std::hex << funcRefAddr << std::endl;
-	logStream << "Actual function address: 0x" << actualFuncAddr << std::endl << std::endl;
+	// Search for Lua API functions - look for "lua_" strings which are part of Lua API registration
+	logStream << "Searching for Lua API registration patterns..." << std::endl;
+	logStream << "Looking for references to function setup near CastSpellByName..." << std::endl << std::endl;
 
-	// We'll do a simpler approach: patch the bytes at the function reference location
-	// to point to our hook function instead
-	logStream << "Patching approach: Direct function replacement" << std::endl;
-	logStream << "Replacing with hook at: 0x" << (DWORD)&CastSpellByName_Hook << std::endl << std::endl;
-
-	DWORD oldProtect = 0;
-	if (!VirtualProtect((void*)funcRefAddr, 4, PAGE_EXECUTE_READWRITE, &oldProtect))
+	// Find references to CastSpellByID function (which should be working)
+	DWORD castSpellByIDStringAddr = 0xa0ac08;
+	
+	logStream << "Looking for CastSpellByID function setup..." << std::endl;
+	
+	// Search for the function table location again
+	for (DWORD searchAddr = baseAddr; searchAddr < baseAddr + modInfo.SizeOfImage - 4; searchAddr++)
 	{
-		logStream << "ERROR: Failed to change memory protection!" << std::endl;
-		logStream.close();
-		MessageBox(nullptr, L"ERROR: Could not modify memory!", L"Error", MB_OK);
-		return 1;
+		DWORD* pAddr = (DWORD*)searchAddr;
+		if (*pAddr == castSpellByIDStringAddr)
+		{
+			DWORD offset = searchAddr - baseAddr;
+			logStream << "Found CastSpellByID reference at 0x" << std::hex << searchAddr << " (offset 0x" << offset << ")" << std::endl;
+
+			// This should be in a data table. Look at the structure
+			DWORD tableBase = searchAddr - 8;  // Assume it's in a table
+			logStream << "Table likely starts at 0x" << std::hex << tableBase << std::endl;
+
+			// Dump more of the table
+			logStream << "Table structure (looking for CastSpellByName nearby):" << std::endl;
+			for (int i = -16; i < 64; i += 8)
+			{
+				DWORD* entry = (DWORD*)(tableBase + i);
+				if (entry >= (DWORD*)baseAddr && entry < (DWORD*)(baseAddr + modInfo.SizeOfImage))
+				{
+					logStream << "  +0x" << std::hex << std::setfill('0') << std::setw(2) << (i & 0xFF) << ": String=0x" << *entry << " Func=0x" << *(entry + 1) << std::endl;
+				}
+			}
+			break;
+		}
 	}
 
-	logStream << "Memory protection changed to READWRITE" << std::endl;
+	// Now search for the actual code that's checking/filtering CastSpellByName
+	logStream << std::endl << "Searching for security check code..." << std::endl;
+	logStream << "Looking for comparison against CastSpellByName string..." << std::endl << std::endl;
 
-	// Replace the function pointer with our hook
-	*(DWORD*)funcRefAddr = (DWORD)&CastSpellByName_Hook;
-
-	logStream << "Function pointer replaced!" << std::endl;
-	logStream << "New function pointer: 0x" << *(DWORD*)funcRefAddr << std::endl << std::endl;
-
-	// Restore original protection
-	DWORD newProtect = 0;
-	if (!VirtualProtect((void*)funcRefAddr, 4, oldProtect, &newProtect))
+	// Search for code that might be doing: if (functionName == "CastSpellByName") then block
+	// This would typically involve LEA or MOV of the string address followed by a comparison
+	
+	int codeRefCount = 0;
+	for (DWORD searchAddr = baseAddr + 0x1000; searchAddr < baseAddr + modInfo.SizeOfImage - 8; searchAddr++)
 	{
-		logStream << "WARNING: Failed to restore memory protection!" << std::endl;
+		// Look for code that loads the CastSpellByName string address
+		BYTE* pCode = (BYTE*)searchAddr;
+		
+		// Pattern: common ways to reference the string
+		// C7 45 ? 18 AC A0 00 = MOV DWORD PTR [EBP+offset], 0xa0ac18
+		// B8 18 AC A0 00 = MOV EAX, 0xa0ac18
+		// etc.
+		
+		if ((pCode[0] == 0xB8 && *(DWORD*)(pCode + 1) == 0xa0ac18) ||
+			(pCode[0] == 0xC7 && *(DWORD*)(pCode + 2) == 0xa0ac18) ||
+			(pCode[0] == 0x68 && *(DWORD*)(pCode + 1) == 0xa0ac18))
+		{
+			codeRefCount++;
+			DWORD offset = searchAddr - baseAddr;
+			logStream << "Code reference #" << std::dec << codeRefCount << " to CastSpellByName string at 0x" << std::hex << searchAddr << " (offset 0x" << offset << ")" << std::endl;
+
+			// Dump context
+			DWORD contextStart = (offset >= 64) ? offset - 64 : 0;
+			DWORD contextEnd = (offset + 64 < modInfo.SizeOfImage) ? offset + 64 : modInfo.SizeOfImage;
+
+			logStream << "  Context:" << std::endl << "  ";
+			for (DWORD i = contextStart; i < contextEnd; i++)
+			{
+				BYTE b = *(BYTE*)(baseAddr + i);
+				if (i == offset) logStream << "[";
+				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
+				if (i == offset + 7) logStream << "]";
+				if ((i - contextStart + 1) % 16 == 0) logStream << std::endl << "  ";
+			}
+			logStream << std::dec << std::endl << std::endl;
+
+			if (codeRefCount >= 5) break;
+		}
 	}
 
-	logStream << "Memory protection restored" << std::endl;
-	logStream << std::endl << "=== PATCHING COMPLETE ===" << std::endl;
-	logStream << "CastSpellByName is now hooked and will allow all spells!" << std::endl;
+	logStream << "Found " << std::dec << codeRefCount << " code references to CastSpellByName string." << std::endl;
 
 	logStream.close();
 
-	MessageBox(nullptr, L"CastSpellByName hooked successfully!\r\nCheck log for details", L"Success", MB_OK);
+	MessageBox(nullptr, L"Analysis complete. Check log for findings.", L"Info", MB_OK);
 
 	return 1;
 }
