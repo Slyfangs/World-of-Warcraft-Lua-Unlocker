@@ -19,7 +19,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW Lua Unlocker - CastSpellByName Search ===" << std::endl;
+	logStream << "=== WoW Lua Unlocker - Finding CastSpellByName References ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -30,51 +30,60 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 
 	logStream.open(LogFile, std::ios::app);
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
-	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
+	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl;
+	logStream << "CastSpellByName string at: 0x" << std::hex << 0x400000 + 0x60ac18 << std::endl << std::endl;
 
-	// Search for CastSpellByName string
-	BYTE searchBytes[] = { 'C', 'a', 's', 't', 'S', 'p', 'e', 'l', 'l', 'B', 'y', 'N', 'a', 'm', 'e', 0 };
+	// Search for references to 0x60ac18 or 0xa0ac18
+	DWORD targetStringAddr = 0xa0ac18;  // Absolute address of "CastSpellByName"
 	DWORD baseAddr = (DWORD)modInfo.lpBaseOfDll;
-	DWORD maxAddr = baseAddr + modInfo.SizeOfImage - 16;
+	DWORD codeStart = baseAddr + 0x1000;  // .text section typically starts here
+	DWORD codeEnd = baseAddr + modInfo.SizeOfImage;
 
-	logStream << "Searching for 'CastSpellByName' string..." << std::endl;
+	logStream << "Searching for references to CastSpellByName address..." << std::endl;
+	logStream << "Looking for: 0x" << std::hex << targetStringAddr << std::endl << std::endl;
 
-	bool foundString = false;
-	for (DWORD currentAddr = baseAddr; currentAddr < maxAddr; currentAddr++)
+	int refCount = 0;
+	for (DWORD currentAddr = codeStart; currentAddr < codeEnd - 4; currentAddr++)
 	{
-		if (memcmp((void*)currentAddr, searchBytes, 16) == 0)
+		// Look for direct address references (4-byte little-endian)
+		DWORD* pAddr = (DWORD*)currentAddr;
+		if (*pAddr == targetStringAddr)
 		{
-			foundString = true;
+			refCount++;
 			DWORD offset = currentAddr - baseAddr;
-			logStream << "FOUND at address: 0x" << std::hex << currentAddr << std::endl;
-			logStream << "Offset from base: 0x" << std::hex << offset << std::endl << std::endl;
+			logStream << "Reference #" << refCount << " found at: 0x" << std::hex << currentAddr << " (offset 0x" << offset << ")" << std::endl;
 
-			// Dump hex context
-			logStream << "Hex dump (512 bytes before and after):" << std::endl;
-			int startOffset = (offset >= 512) ? offset - 512 : 0;
-			int endOffset = (offset + 16 + 512 < modInfo.SizeOfImage) ? offset + 16 + 512 : modInfo.SizeOfImage;
+			// Dump 256 bytes of code context around this reference
+			DWORD contextStart = (offset >= 128) ? offset - 128 : 0;
+			DWORD contextEnd = (offset + 256 < modInfo.SizeOfImage) ? offset + 256 : modInfo.SizeOfImage;
 
-			for (int i = startOffset; i < endOffset; i++)
+			logStream << "  Code context (128 before, 128 after):" << std::endl << "  ";
+			for (DWORD i = contextStart; i < contextEnd; i++)
 			{
 				BYTE b = *(BYTE*)(baseAddr + i);
-				if (i == offset) logStream << "[";
+				if (i == offset) logStream << "[REF:";
 				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
-				if (i == offset + 15) logStream << "]";
-				if ((i - startOffset + 1) % 16 == 0) logStream << std::endl;
+				if (i == offset + 3) logStream << "]";
+				if ((i - contextStart + 1) % 16 == 0) logStream << std::endl << "  ";
 			}
 			logStream << std::dec << std::endl << std::endl;
-			break;
+
+			if (refCount >= 10)
+			{
+				logStream << "... (showing first 10 references)" << std::endl;
+				break;
+			}
 		}
 	}
 
-	if (!foundString)
+	if (refCount == 0)
 	{
-		logStream << "ERROR: 'CastSpellByName' string not found in module!" << std::endl;
+		logStream << "No direct address references found. The string might be referenced differently." << std::endl;
 	}
 
 	logStream.close();
 
-	MessageBox(nullptr, L"Search complete. Check C:\\WoW_Lua_Unlocker_Log.txt", L"Info", MB_OK);
+	MessageBox(nullptr, L"Reference search complete. Check C:\\WoW_Lua_Unlocker_Log.txt", L"Info", MB_OK);
 
 	return 1;
 }
