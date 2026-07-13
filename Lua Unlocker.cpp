@@ -19,7 +19,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW Lua Unlocker - Finding Code References to Data ===" << std::endl;
+	logStream << "=== WoW Lua Unlocker - Searching for Lua Function Checks ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -30,74 +30,65 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 
 	logStream.open(LogFile, std::ios::app);
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
-	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl;
-	logStream << "Looking for references to data at: 0x" << std::hex << 0xaccde8 << std::endl << std::endl;
+	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	// Search for references to 0xaccde8 (where CastSpellByName ref is stored)
-	DWORD targetDataAddr = 0xaccde8;
+	// Search for "CastSpellByID" string which is right before CastSpellByName
+	BYTE castSpellByIDBytes[] = { 'C', 'a', 's', 't', 'S', 'p', 'e', 'l', 'l', 'B', 'y', 'I', 'D', 0 };
 	DWORD baseAddr = (DWORD)modInfo.lpBaseOfDll;
-	DWORD codeStart = baseAddr + 0x1000;
-	DWORD codeEnd = baseAddr + modInfo.SizeOfImage;
+	DWORD maxAddr = baseAddr + modInfo.SizeOfImage - 14;
 
-	logStream << "Searching for code that references this data location..." << std::endl << std::endl;
+	logStream << "Searching for 'CastSpellByID' string..." << std::endl;
 
-	int refCount = 0;
-	for (DWORD currentAddr = codeStart; currentAddr < codeEnd - 4; currentAddr++)
+	for (DWORD currentAddr = baseAddr; currentAddr < maxAddr; currentAddr++)
 	{
-		DWORD* pAddr = (DWORD*)currentAddr;
-		if (*pAddr == targetDataAddr)
+		if (memcmp((void*)currentAddr, castSpellByIDBytes, 14) == 0)
 		{
-			refCount++;
 			DWORD offset = currentAddr - baseAddr;
-			logStream << "Code Reference #" << refCount << " at: 0x" << std::hex << currentAddr << " (offset 0x" << offset << ")" << std::endl;
+			logStream << "Found 'CastSpellByID' at: 0x" << std::hex << currentAddr << " (offset 0x" << offset << ")" << std::endl;
 
-			// Dump 256 bytes of code context
-			DWORD contextStart = (offset >= 128) ? offset - 128 : 0;
-			DWORD contextEnd = (offset + 128 < modInfo.SizeOfImage) ? offset + 128 : modInfo.SizeOfImage;
+			// Now search for references to this address
+			logStream << "Searching for code references to this string..." << std::endl;
+			DWORD refCount = 0;
 
-			logStream << "  Context:" << std::endl << "  ";
-			for (DWORD i = contextStart; i < contextEnd; i++)
+			for (DWORD searchAddr = baseAddr; searchAddr < baseAddr + modInfo.SizeOfImage - 4; searchAddr++)
 			{
-				BYTE b = *(BYTE*)(baseAddr + i);
-				if (i == offset) logStream << "[";
-				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
-				if (i == offset + 3) logStream << "]";
-				if ((i - contextStart + 1) % 16 == 0) logStream << std::endl << "  ";
-			}
-			logStream << std::dec << std::endl << std::endl;
+				DWORD* pAddr = (DWORD*)searchAddr;
+				if (*pAddr == currentAddr)
+				{
+					refCount++;
+					DWORD refOffset = searchAddr - baseAddr;
+					logStream << "  Reference #" << refCount << " at: 0x" << std::hex << searchAddr << " (offset 0x" << refOffset << ")" << std::endl;
 
-			if (refCount >= 5)
+					// Dump function context - look backwards for function start
+					DWORD funcStart = (refOffset >= 256) ? refOffset - 256 : 0;
+					logStream << "    Code context:" << std::endl << "    ";
+
+					for (DWORD i = funcStart; i < refOffset + 64 && i < modInfo.SizeOfImage; i++)
+					{
+						BYTE b = *(BYTE*)(baseAddr + i);
+						if (i == refOffset) logStream << "[REF:";
+						logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
+						if (i == refOffset + 3) logStream << "]";
+						if ((i - funcStart + 1) % 16 == 0) logStream << std::endl << "    ";
+					}
+					logStream << std::dec << std::endl << std::endl;
+
+					if (refCount >= 3) break;
+				}
+			}
+
+			if (refCount > 0)
 			{
-				logStream << "... (showing first 5 code references)" << std::endl;
-				break;
+				logStream << "Found " << refCount << " references to CastSpellByID. CastSpellByName should be nearby in the function table." << std::endl;
 			}
-		}
-	}
 
-	if (refCount == 0)
-	{
-		logStream << "No code references found to data address." << std::endl;
-		logStream << "Trying alternative search for nearby addresses..." << std::endl << std::endl;
-
-		// Try searching for addresses within 0x1000 bytes of our target
-		for (DWORD currentAddr = codeStart; currentAddr < codeEnd - 4; currentAddr++)
-		{
-			DWORD* pAddr = (DWORD*)currentAddr;
-			DWORD diff = (*pAddr > targetDataAddr) ? *pAddr - targetDataAddr : targetDataAddr - *pAddr;
-			if (diff < 0x1000 && diff > 0)
-			{
-				refCount++;
-				DWORD offset = currentAddr - baseAddr;
-				logStream << "Nearby Reference #" << refCount << " at: 0x" << std::hex << currentAddr << " points to: 0x" << *pAddr << std::endl;
-
-				if (refCount >= 3) break;
-			}
+			break;
 		}
 	}
 
 	logStream.close();
 
-	MessageBox(nullptr, L"Code reference search complete. Check C:\\WoW_Lua_Unlocker_Log.txt", L"Info", MB_OK);
+	MessageBox(nullptr, L"Lua function reference search complete. Check C:\\WoW_Lua_Unlocker_Log.txt", L"Info", MB_OK);
 
 	return 1;
 }
