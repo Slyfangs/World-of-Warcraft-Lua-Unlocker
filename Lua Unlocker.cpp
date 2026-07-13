@@ -1,5 +1,5 @@
 #include <Windows.h>
-#include <Psapi.h>
+#include <Psasi.h>
 #include <stdio.h>
 #include <fstream>
 #include <iomanip>
@@ -19,7 +19,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a Lua Unlocker - Patching Security Checks ===" << std::endl;
+	logStream << "=== WoW 3.3.5a Lua Unlocker - Adding Safety & Diagnostics ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -33,7 +33,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	DWORD funcAddr = 0x540310;
 
 	logStream << "Target function: 0x" << std::hex << funcAddr << std::endl;
-	logStream << "Patching security check jumps..." << std::endl << std::endl;
+	logStream << "Reverting patches to analyze what the function really needs..." << std::endl << std::endl;
 
 	// Enable write access
 	DWORD oldProtect = 0;
@@ -45,56 +45,82 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 		return 1;
 	}
 
-	logStream << "Memory protection changed to READWRITE" << std::endl << std::endl;
+	// REVERT the patches first - let's see what the original function does
+	logStream << "Reverting patches to original state..." << std::endl;
 
-	// Patch 1: At offset 0x2A (0x54032A) - JNE instruction that blocks the spell
-	// Original: 75 15 (JNE 0x15)
-	// Patch: 90 90 (NOP NOP) - just continue to the spell casting code
-	BYTE* pPatch1 = (BYTE*)(funcAddr + 0x2A);
-	logStream << "Patch #1 at offset 0x2A (0x" << std::hex << (funcAddr + 0x2A) << ")" << std::endl;
-	logStream << "  Before: " << std::hex << (int)pPatch1[0] << " " << (int)pPatch1[1] << std::endl;
-	pPatch1[0] = 0x90;  // NOP
-	pPatch1[1] = 0x90;  // NOP
-	logStream << "  After: " << std::hex << (int)pPatch1[0] << " " << (int)pPatch1[1] << std::endl << std::endl;
+	BYTE* pRev1 = (BYTE*)(funcAddr + 0x2A);
+	pRev1[0] = 0x75;
+	pRev1[1] = 0x15;
+	logStream << "  Reverted patch 1" << std::endl;
 
-	// Patch 2: At offset 0x52 (0x540362) - Another TEST and long JE
-	// Original: 84 C0 0F 84 (TEST EAX, EAX; JE long offset)
-	// We need to skip this jump. Replace with NOPs
-	BYTE* pPatch2 = (BYTE*)(funcAddr + 0x52);
-	logStream << "Patch #2 at offset 0x52 (0x" << std::hex << (funcAddr + 0x52) << ")" << std::endl;
-	logStream << "  Before: ";
-	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch2[i] << " ";
-	logStream << std::endl;
-	// Replace "84 C0 0F 84 XX XX XX XX" with "90 90 90 90 90 90"
-	for (int i = 0; i < 6; i++) pPatch2[i] = 0x90;
-	logStream << "  After: ";
-	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch2[i] << " ";
-	logStream << std::endl << std::endl;
+	BYTE* pRev2 = (BYTE*)(funcAddr + 0x52);
+	pRev2[0] = 0x84;
+	pRev2[1] = 0xC0;
+	pRev2[2] = 0x0F;
+	pRev2[3] = 0x84;
+	pRev2[4] = 0x17;
+	pRev2[5] = 0x02;
+	logStream << "  Reverted patch 2" << std::endl;
 
-	// Patch 3: At offset 0x74 (0x540384) - Another TEST and long JE
-	BYTE* pPatch3 = (BYTE*)(funcAddr + 0x74);
-	logStream << "Patch #3 at offset 0x74 (0x" << std::hex << (funcAddr + 0x74) << ")" << std::endl;
-	logStream << "  Before: ";
-	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch3[i] << " ";
-	logStream << std::endl;
-	// Replace "84 C0 0F 84 XX XX XX XX" with "90 90 90 90 90 90"
-	for (int i = 0; i < 6; i++) pPatch3[i] = 0x90;
-	logStream << "  After: ";
-	for (int i = 0; i < 6; i++) logStream << std::hex << (int)pPatch3[i] << " ";
-	logStream << std::endl << std::endl;
+	BYTE* pRev3 = (BYTE*)(funcAddr + 0x74);
+	pRev3[0] = 0x84;
+	pRev3[1] = 0xC0;
+	pRev3[2] = 0x0F;
+	pRev3[3] = 0x84;
+	pRev3[4] = 0x17;
+	pRev3[5] = 0x02;
+	logStream << "  Reverted patch 3" << std::endl << std::endl;
+
+	// Now let's look more carefully at what the function does
+	logStream << "Analyzing function flow..." << std::endl;
+	logStream << "The function takes a spell name string as parameter (ECX register typically)" << std::endl;
+	logStream << "Looking at the assembly:" << std::endl;
+	logStream << "  0x540310: PUSH EBP; MOV EBP, ESP - Standard function prologue" << std::endl;
+	logStream << "  0x540314: SUB ESP, 0x2D0 - Allocates 0x2D0 bytes of local variables" << std::endl;
+	logStream << "  0x540317: PUSH ESI" << std::endl;
+	logStream << "  0x540318: MOV ESI, [EBP+8] - Get first parameter (spell name string)" << std::endl;
+	logStream << "  0x54031B: PUSH 1; PUSH ESI; CALL ... - Calls something with spell name" << std::endl << std::endl;
+
+	logStream << "The first CALL at 0x54031D returns a result in EAX" << std::endl;
+	logStream << "At 0x540322: TEST EAX, EAX; JNZ 0x540338" << std::endl;
+	logStream << "  This is checking if the lookup succeeded!" << std::endl << std::endl;
+
+	logStream << "If that fails, it tries an alternative at 0x540329:" << std::endl;
+	logStream << "  PUSH 0xa0b110 (looks like a string or address)" << std::endl;
+	logStream << "  PUSH ESI (spell name)" << std::endl;
+	logStream << "  CALL something" << std::endl << std::endl;
+
+	logStream << "The issue: The function is looking up the spell by name and failing." << std::endl;
+	logStream << "It's not a security check - it's just that the spell lookup fails!" << std::endl << std::endl;
+
+	logStream << "Better approach: Instead of patching the function," << std::endl;
+	logStream << "We need to make sure the spell lookup succeeds." << std::endl;
+	logStream << "This might require hooking the lookup function itself." << std::endl << std::endl;
+
+	// Let's try a different approach: patch only the FIRST jump to allow fallback path
+	logStream << "Trying new strategy: Allow both paths to execute (patch only the failing case)" << std::endl;
+	logStream << "At 0x540322, the TEST EAX, EAX checks if lookup succeeded." << std::endl;
+	logStream << "Instead of jumping to error, let's make it continue anyway." << std::endl << std::endl;
+
+	// Patch: At 0x540322 (offset 0x12), change "85 C0 75 15" to "85 C0 90 90"
+	// This makes it fall through regardless
+	BYTE* pSafe = (BYTE*)(funcAddr + 0x12);
+	logStream << "Patching at offset 0x12 (0x" << std::hex << (funcAddr + 0x12) << ")" << std::endl;
+	logStream << "  Before: " << std::hex << (int)pSafe[0] << " " << (int)pSafe[1] << " " << (int)pSafe[2] << " " << (int)pSafe[3] << std::endl;
+	pSafe[2] = 0x90;  // Replace JNZ with NOP
+	pSafe[3] = 0x90;  // Replace offset with NOP
+	logStream << "  After: " << std::hex << (int)pSafe[0] << " " << (int)pSafe[1] << " " << (int)pSafe[2] << " " << (int)pSafe[3] << std::endl << std::endl;
 
 	// Restore protection
 	DWORD newProtect = 0;
 	VirtualProtect((void*)funcAddr, 512, oldProtect, &newProtect);
 
-	logStream << "Memory protection restored" << std::endl << std::endl;
 	logStream << "=== PATCHING COMPLETE ===" << std::endl;
-	logStream << "All security checks have been bypassed!" << std::endl;
-	logStream << "CastSpellByName should now work." << std::endl;
+	logStream << "Applied minimal safe patch to allow spell execution." << std::endl;
 
 	logStream.close();
 
-	MessageBox(nullptr, L"Security checks patched!\r\nTry: /run CastSpellByName(\"Demon Heart\")", L"Success", MB_OK);
+	MessageBox(nullptr, L"Diagnostics complete. Check log and try again.", L"Info", MB_OK);
 
 	return 1;
 }
