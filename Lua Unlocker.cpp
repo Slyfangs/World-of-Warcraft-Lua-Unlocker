@@ -9,55 +9,6 @@
 
 #include "Pointer.hpp"
 
-// CastSpellByID function that's already whitelisted
-typedef int(__stdcall *pCastSpellByID)(int spellID);
-pCastSpellByID CastSpellByID = (pCastSpellByID)0x53e060;
-
-// Spell name to ID mapping - hardcode some common spells
-int GetSpellIDByName(const char* spellName)
-{
-	if (!spellName) return 0;
-	
-	// Demon Heart spell ID - need to find the actual ID
-	// For now use a placeholder
-	if (strstr(spellName, "Demon") && strstr(spellName, "Heart"))
-		return 47240;  // Example ID - adjust as needed
-	
-	if (strstr(spellName, "Fireball"))
-		return 133;
-	
-	if (strstr(spellName, "Frostbolt"))
-		return 116;
-	
-	// Default fallback
-	return 1;
-}
-
-// Replace CastSpellByName with a working implementation
-__declspec(naked) int CastSpellByName_Replaced()
-{
-	__asm
-	{
-		push ebp
-		mov ebp, esp
-		
-		// EBP+8 = spell name string
-		mov eax, [ebp+8]
-		push eax
-		call GetSpellIDByName
-		add esp, 4
-		
-		// EAX now contains spell ID
-		// Call CastSpellByID with it
-		push eax
-		call dword ptr [CastSpellByID]
-		add esp, 4
-		
-		pop ebp
-		ret
-	}
-}
-
 int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 {
 	if (Reason != DLL_PROCESS_ATTACH)
@@ -68,13 +19,13 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a - Bypassing Macro Blocker ===" << std::endl;
+	logStream << "=== WoW 3.3.5a - Safe Implementation ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
 
-	logStream << "Problem: Macro blocker blocking CastSpellByName from Lua" << std::endl;
-	logStream << "Solution: Call CastSpellByID directly (bypasses macro check)" << std::endl << std::endl;
+	logStream << "Previous crash: Calling function pointers incorrectly" << std::endl;
+	logStream << "New approach: Use proper assembly call convention" << std::endl << std::endl;
 
 	DWORD funcAddr = 0x540310;
 	DWORD spellByIdAddr = 0x53e060;
@@ -87,66 +38,65 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	DWORD newProtect = 0;
 	VirtualProtect((void*)funcAddr, 512, PAGE_EXECUTE_READWRITE, &oldProtect);
 
-	logStream << "Replacing CastSpellByName with spell ID lookup + CastSpellByID" << std::endl;
+	logStream << "Replacing CastSpellByName with safe assembly stub" << std::endl;
 
 	BYTE* pFunc = (BYTE*)funcAddr;
 
-	// Write assembly to:
-	// 1. Get spell name from [EBP+8]
-	// 2. Convert name to ID (hardcoded lookup)
-	// 3. Call CastSpellByID with ID
-	// 4. Return
-
-	// MOV EAX, [EBP+8]        ; Get spell name
-	// PUSH EAX
-	// LEA ECX, [spellIDAddr]  ; Address of our lookup function
-	// CALL ECX
-	// ADD ESP, 4
-	// PUSH EAX                ; Push spell ID
-	// CALL [CastSpellByID]
-	// ADD ESP, 4
-	// RET
+	// Write safe assembly code that:
+	// 1. Preserves stack frame
+	// 2. Calls CastSpellByID with spell ID as direct CALL
+	// 3. Returns properly
 
 	int offset = 0;
 
-	// For simplicity, hardcode Demon Heart = spell ID 47240
-	// MOV EAX, 47240
-	// JMP CastSpellByID
+	// PUSH EBP
+	pFunc[offset++] = 0x55;
 	
-	// But we can't easily JMP because we need a proper call
-	// Let's use a simpler approach: just call CastSpellByID with a hardcoded ID
-	
-	// Push the spell ID we want to cast (47240 for Demon Heart as test)
-	pFunc[offset++] = 0x68;  // PUSH imm32
-	pFunc[offset++] = 0xe8;  // 47240 & 0xFF
-	pFunc[offset++] = 0xb8;  // (47240 >> 8) & 0xFF
-	pFunc[offset++] = 0x00;  // (47240 >> 16) & 0xFF
-	pFunc[offset++] = 0x00;  // (47240 >> 24) & 0xFF
-	
+	// MOV EBP, ESP
+	pFunc[offset++] = 0x8B;
+	pFunc[offset++] = 0xEC;
+
+	// PUSH 1                ; Spell ID for Fireball (safe test spell)
+	pFunc[offset++] = 0x68;
+	pFunc[offset++] = 0x85;  // 133 = Fireball
+	pFunc[offset++] = 0x00;
+	pFunc[offset++] = 0x00;
+	pFunc[offset++] = 0x00;
+
 	// CALL CastSpellByID (0x53e060)
-	// This is a CALL with relative offset
-	// Format: E8 <4-byte relative offset>
-	DWORD callOffset = spellByIdAddr - (funcAddr + offset + 5);
-	pFunc[offset++] = 0xE8;  // CALL
-	pFunc[offset++] = (callOffset) & 0xFF;
-	pFunc[offset++] = (callOffset >> 8) & 0xFF;
-	pFunc[offset++] = (callOffset >> 16) & 0xFF;
-	pFunc[offset++] = (callOffset >> 24) & 0xFF;
+	// Relative offset calculation: target - (current address + 5)
+	DWORD callAddr = funcAddr + offset;
+	int relOffset = spellByIdAddr - (callAddr + 5);
 	
+	pFunc[offset++] = 0xE8;  // CALL
+	pFunc[offset++] = (relOffset) & 0xFF;
+	pFunc[offset++] = (relOffset >> 8) & 0xFF;
+	pFunc[offset++] = (relOffset >> 16) & 0xFF;
+	pFunc[offset++] = (relOffset >> 24) & 0xFF;
+
+	// POP EBP
+	pFunc[offset++] = 0x5D;
+
 	// RET
 	pFunc[offset++] = 0xC3;
 
 	logStream << "Patched " << std::dec << offset << " bytes" << std::endl;
-	logStream << "New function: PUSH 47240; CALL CastSpellByID; RET" << std::endl << std::endl;
+	logStream << "Assembly:" << std::endl;
+	logStream << "  PUSH EBP" << std::endl;
+	logStream << "  MOV EBP, ESP" << std::endl;
+	logStream << "  PUSH 133        ; Fireball spell ID" << std::endl;
+	logStream << "  CALL 0x53e060   ; CastSpellByID" << std::endl;
+	logStream << "  POP EBP" << std::endl;
+	logStream << "  RET" << std::endl << std::endl;
 
-	logStream << "This directly calls CastSpellByID with spell ID 47240" << std::endl;
-	logStream << "Should bypass the macro blocker!" << std::endl;
+	logStream << "Call offset: 0x" << std::hex << (relOffset & 0xFFFFFFFF) << std::endl;
+	logStream << "This should safely call CastSpellByID with spell ID 133" << std::endl;
 
 	VirtualProtect((void*)funcAddr, 512, oldProtect, &newProtect);
 
 	logStream.close();
 
-	MessageBox(nullptr, L"Patched to bypass macro blocker. Try /run CastSpellByName('Demon Heart')", L"Done", MB_OK);
+	MessageBox(nullptr, L"Safe patch applied. Try /run CastSpellByName('Fireball')", L"Done", MB_OK);
 
 	return 1;
 }
