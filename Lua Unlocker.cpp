@@ -9,16 +9,6 @@
 
 #include "Pointer.hpp"
 
-// Simple hook: return 1 (success) immediately
-__declspec(naked) int CastSpellByName_Hook()
-{
-	__asm
-	{
-		mov eax, 1          // EAX = 1 (success/true)
-		ret                 // Return immediately
-	}
-}
-
 int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 {
 	if (Reason != DLL_PROCESS_ATTACH)
@@ -29,7 +19,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a Lua Unlocker - Direct Function Pointer Hook ===" << std::endl;
+	logStream << "=== WoW 3.3.5a Lua Unlocker - Analyzing Original CastSpellByName Function ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -40,62 +30,118 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
 	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	// The function table entry for CastSpellByName
-	DWORD castSpellByNameTableEntry = 0xaccde8;
-	DWORD castSpellByNameFuncPtr = castSpellByNameTableEntry + 4;  // +4 bytes for the function pointer
+	// The original CastSpellByName function
+	DWORD originalFuncAddr = 0x540310;
 
-	logStream << "CastSpellByName table entry at: 0x" << std::hex << castSpellByNameTableEntry << std::endl;
-	logStream << "Function pointer location at: 0x" << castSpellByNameFuncPtr << std::endl << std::endl;
+	logStream << "Original CastSpellByName function at: 0x" << std::hex << originalFuncAddr << std::endl;
+	logStream << "Dumping first 256 bytes of function..." << std::endl << std::endl;
 
-	DWORD* pFuncPtr = (DWORD*)castSpellByNameFuncPtr;
-	DWORD originalFunc = *pFuncPtr;
-
-	logStream << "Original function pointer: 0x" << std::hex << originalFunc << std::endl;
-	logStream << "Hook function address: 0x" << (DWORD)&CastSpellByName_Hook << std::endl << std::endl;
-
-	// Change memory protection to allow writing
-	DWORD oldProtect = 0;
-	if (!VirtualProtect((void*)castSpellByNameFuncPtr, 4, PAGE_EXECUTE_READWRITE, &oldProtect))
+	for (int i = 0; i < 256; i += 16)
 	{
-		logStream << "ERROR: Failed to change memory protection!" << std::endl;
-		logStream.close();
-		MessageBox(nullptr, L"ERROR: Could not modify memory protection!", L"Error", MB_OK);
-		return 1;
+		logStream << "0x" << std::hex << std::setfill('0') << std::setw(8) << (originalFuncAddr + i) << ": ";
+		for (int j = 0; j < 16; j++)
+		{
+			BYTE b = *(BYTE*)(originalFuncAddr + i + j);
+			logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
+		}
+		logStream << "| ";
+		for (int j = 0; j < 16; j++)
+		{
+			BYTE b = *(BYTE*)(originalFuncAddr + i + j);
+			logStream << (isprint(b) ? (char)b : '.');
+		}
+		logStream << std::endl;
 	}
 
-	logStream << "Memory protection changed successfully" << std::endl;
-	logStream << "Old protection: 0x" << std::hex << oldProtect << std::endl << std::endl;
+	logStream << std::endl << "=== Looking for strings referenced by this function ===" << std::endl;
 
-	// Replace the function pointer
-	logStream << "Replacing function pointer..." << std::endl;
-	*pFuncPtr = (DWORD)&CastSpellByName_Hook;
-
-	logStream << "New function pointer: 0x" << std::hex << *pFuncPtr << std::endl << std::endl;
-
-	// Restore original protection
-	DWORD newProtect = 0;
-	VirtualProtect((void*)castSpellByNameFuncPtr, 4, oldProtect, &newProtect);
-
-	logStream << "Memory protection restored" << std::endl << std::endl;
-
-	// Verify the patch
-	if (*pFuncPtr == (DWORD)&CastSpellByName_Hook)
+	// Search for string references in the function
+	for (int i = 0; i < 256; i += 4)
 	{
-		logStream << "=== SUCCESS ===" << std::endl;
-		logStream << "CastSpellByName function pointer has been successfully replaced!" << std::endl;
-		logStream << "The Lua function should now work without restrictions." << std::endl;
+		DWORD* pAddr = (DWORD*)(originalFuncAddr + i);
+		DWORD addr = *pAddr;
+
+		// Check if this looks like a string address (in data section around 0xa0xxxx)
+		if (addr >= 0xa00000 && addr <= 0xb00000)
+		{
+			logStream << "Potential string reference at offset 0x" << std::hex << i << ": 0x" << addr << std::endl;
+			
+			// Try to read the string
+			try
+			{
+				char* pStr = (char*)addr;
+				if (pStr && strlen(pStr) < 100)
+				{
+					logStream << "  String: \"" << pStr << "\"" << std::endl;
+				}
+			}
+			catch (...)
+			{
+				logStream << "  (Could not read string)" << std::endl;
+			}
+		}
 	}
-	else
+
+	logStream << std::endl << "=== Searching for common patterns ===" << std::endl;
+
+	// Search for CMP instructions that might be security checks
+	BYTE* pFunc = (BYTE*)originalFuncAddr;
+	int cmpCount = 0;
+
+	for (int i = 0; i < 256; i++)
 	{
-		logStream << "=== WARNING ===" << std::endl;
-		logStream << "Pointer verification failed!" << std::endl;
-		logStream << "Expected: 0x" << std::hex << (DWORD)&CastSpellByName_Hook << std::endl;
-		logStream << "Got: 0x" << *pFuncPtr << std::endl;
+		// CMP EAX, 0x?? = 83 F8 ??
+		// CMP with immediate = 81 xx ?? ?? ?? ??
+		// TEST instruction = 85 xx, 84 xx
+		
+		if ((pFunc[i] == 0x83 && pFunc[i + 1] == 0xF8) ||  // CMP EAX, imm8
+			(pFunc[i] == 0x81 && (pFunc[i + 1] & 0x38) == 0x38) ||  // CMP r32, imm32
+			(pFunc[i] == 0x85) ||  // TEST r/m32, r32
+			(pFunc[i] == 0x84))    // TEST r/m8, r8
+		{
+			cmpCount++;
+			logStream << "Found comparison/test at offset 0x" << std::hex << i << ": ";
+			for (int j = 0; j < 6 && i + j < 256; j++)
+			{
+				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)pFunc[i + j] << " ";
+			}
+			logStream << std::endl;
+
+			if (cmpCount >= 5) break;
+		}
+	}
+
+	logStream << std::endl << "=== Looking for conditional jumps (JE, JNE, JZ, etc.) ===" << std::endl;
+
+	int jumpCount = 0;
+	for (int i = 0; i < 256; i++)
+	{
+		BYTE b = pFunc[i];
+		
+		// Short conditional jumps: 0x70-0x7F
+		// Long conditional jumps: 0x0F 0x80-0x8F
+		
+		if ((b >= 0x70 && b <= 0x7F) || (b == 0xEB))  // Short jumps
+		{
+			jumpCount++;
+			BYTE offset = pFunc[i + 1];
+			logStream << "Found jump at offset 0x" << std::hex << i << " (opcode 0x" << (int)b << "), target offset: 0x" << (int)offset << std::endl;
+
+			if (jumpCount >= 5) break;
+		}
+		else if (b == 0x0F && i + 1 < 256 && pFunc[i + 1] >= 0x80 && pFunc[i + 1] <= 0x8F)  // Long jumps
+		{
+			jumpCount++;
+			DWORD offset = *(DWORD*)(pFunc + i + 2);
+			logStream << "Found long jump at offset 0x" << std::hex << i << " (opcode 0x" << (int)pFunc[i + 1] << "), offset: 0x" << offset << std::endl;
+
+			if (jumpCount >= 5) break;
+		}
 	}
 
 	logStream.close();
 
-	MessageBox(nullptr, L"CastSpellByName hooked!\r\nCheck log and try: /run CastSpellByName(\"Fireball\")", L"Success", MB_OK);
+	MessageBox(nullptr, L"Function analysis complete. Check log.", L"Info", MB_OK);
 
 	return 1;
 }
