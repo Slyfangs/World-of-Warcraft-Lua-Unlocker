@@ -19,7 +19,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
 	std::ofstream logStream(LogFile);
-	logStream << "=== WoW 3.3.5a Lua Unlocker - Finding Correct CastSpellByName Entry ===" << std::endl;
+	logStream << "=== WoW 3.3.5a Lua Unlocker - Finding All References to CastSpellByName ===" << std::endl;
 	SYSTEMTIME sysTime;
 	GetLocalTime(&sysTime);
 	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
@@ -28,54 +28,89 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 	GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &modInfo, sizeof(MODULEINFO));
 
 	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
-	logStream << "Searching for CastSpellByName string in function table..." << std::endl << std::endl;
+	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	DWORD funcTableAddr = 0xaccdf0;
+	DWORD baseAddr = (DWORD)modInfo.lpBaseOfDll;
 	DWORD castSpellByNameStringAddr = 0xa0ac18;
 
-	// Search through the function table to find the CastSpellByName entry
-	logStream << "Scanning function table from 0x" << std::hex << funcTableAddr << std::endl;
-	logStream << "Looking for string pointer: 0x" << castSpellByNameStringAddr << std::endl << std::endl;
+	logStream << "Searching entire module for references to CastSpellByName string (0xa0ac18)..." << std::endl << std::endl;
 
-	int entryCount = 0;
-	bool found = false;
-
-	for (DWORD offset = 0; offset < 0x2000; offset += 8)  // Each entry is 8 bytes
+	int refCount = 0;
+	for (DWORD searchAddr = baseAddr; searchAddr < baseAddr + modInfo.SizeOfImage - 4; searchAddr++)
 	{
-		DWORD* pEntry = (DWORD*)(funcTableAddr + offset);
-		DWORD stringPtr = *pEntry;
-		DWORD funcPtr = *(pEntry + 1);
-
-		if (stringPtr == castSpellByNameStringAddr)
+		DWORD* pAddr = (DWORD*)searchAddr;
+		if (*pAddr == castSpellByNameStringAddr)
 		{
-			found = true;
-			logStream << "FOUND CastSpellByName at offset 0x" << std::hex << offset << std::endl;
-			logStream << "  Absolute address: 0x" << (funcTableAddr + offset) << std::endl;
-			logStream << "  String pointer: 0x" << stringPtr << std::endl;
-			logStream << "  Function pointer: 0x" << funcPtr << std::endl;
-			logStream << "  Function pointer address (to patch): 0x" << (funcTableAddr + offset + 4) << std::endl << std::endl;
-			break;
-		}
+			refCount++;
+			DWORD offset = searchAddr - baseAddr;
+			
+			logStream << "Reference #" << std::dec << refCount << " at 0x" << std::hex << searchAddr << " (offset 0x" << offset << ")" << std::endl;
 
-		// Also log entries around "CastSpell" strings for reference
-		if (stringPtr >= 0xa0ac00 && stringPtr <= 0xa0ad00)
-		{
-			logStream << "Entry #" << std::dec << entryCount << " at offset 0x" << std::hex << offset << ": ";
-			logStream << "String=0x" << stringPtr << " Func=0x" << funcPtr << std::endl;
-		}
+			// Dump context to understand what's happening
+			DWORD contextStart = (offset >= 32) ? offset - 32 : 0;
+			DWORD contextEnd = (offset + 32 < modInfo.SizeOfImage) ? offset + 32 : modInfo.SizeOfImage;
 
-		entryCount++;
-		if (entryCount > 0x1000) break;  // Safety limit
+			logStream << "  Context:" << std::endl << "  ";
+			for (DWORD i = contextStart; i < contextEnd; i++)
+			{
+				BYTE b = *(BYTE*)(baseAddr + i);
+				if (i == offset) logStream << "[";
+				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
+				if (i == offset + 3) logStream << "]";
+				if ((i - contextStart + 1) % 16 == 0) logStream << std::endl << "  ";
+			}
+			logStream << std::dec << std::endl << std::endl;
+
+			if (refCount >= 10)
+			{
+				logStream << "... (showing first 10 references)" << std::endl;
+				break;
+			}
+		}
 	}
 
-	if (!found)
+	if (refCount == 0)
 	{
-		logStream << "ERROR: Could not find CastSpellByName entry in function table!" << std::endl;
+		logStream << "No references found!" << std::endl;
+		logStream << "The CastSpellByName security might be enforced differently." << std::endl;
+		logStream << std::endl << "Alternative: Searching for the pattern in your original code..." << std::endl;
+		logStream << "The old pattern was: 56 8B F1 8B 0D ? ? ? ? 8B 11 FF 92 ? ? ? ? 84 C0 74 10" << std::endl;
+		logStream << "Let's search for '84 C0 74 10' which is the actual security check bytes..." << std::endl << std::endl;
+
+		// Search for the security check pattern: 84 C0 74 10
+		BYTE securityPattern[] = { 0x84, 0xC0, 0x74, 0x10 };
+		for (DWORD searchAddr = baseAddr; searchAddr < baseAddr + modInfo.SizeOfImage - 4; searchAddr++)
+		{
+			if (memcmp((void*)searchAddr, securityPattern, 4) == 0)
+			{
+				int patternCount = (searchAddr == baseAddr) ? 1 : (patternCount + 1);
+				DWORD offset = searchAddr - baseAddr;
+				
+				logStream << "Found '84 C0 74 10' pattern at 0x" << std::hex << searchAddr << " (offset 0x" << offset << ")" << std::endl;
+
+				// Dump context
+				DWORD contextStart = (offset >= 64) ? offset - 64 : 0;
+				DWORD contextEnd = (offset + 64 < modInfo.SizeOfImage) ? offset + 64 : modInfo.SizeOfImage;
+
+				logStream << "  Context:" << std::endl << "  ";
+				for (DWORD i = contextStart; i < contextEnd; i++)
+				{
+					BYTE b = *(BYTE*)(baseAddr + i);
+					if (i == offset) logStream << "[";
+					logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
+					if (i == offset + 3) logStream << "]";
+					if ((i - contextStart + 1) % 16 == 0) logStream << std::endl << "  ";
+				}
+				logStream << std::dec << std::endl << std::endl;
+
+				if (patternCount >= 3) break;
+			}
+		}
 	}
 
 	logStream.close();
 
-	MessageBox(nullptr, found ? L"CastSpellByName entry found! Check log for address." : L"ERROR: CastSpellByName not found in table!", L"Info", MB_OK);
+	MessageBox(nullptr, L"Search complete. Check C:\\WoW_Lua_Unlocker_Log.txt", L"Info", MB_OK);
 
 	return 1;
 }
