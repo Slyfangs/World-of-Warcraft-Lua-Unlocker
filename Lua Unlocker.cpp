@@ -8,20 +8,20 @@
 
 // 3.3.5a Pattern: Bypasses the insecure function check for protected Lua functions
 // like CastSpellByName and CastSpellByID
-const unsigned char NewBytes[] = {0xEB, 0x10};
-const unsigned char PatternBytes[] = {0x56, 0x8B, 0xF1, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x11, 0xFF, 0x92, 0x00, 0x00, 0x00, 0x00, 0x84, 0xC0, 0x74, 0x10};
+const unsigned char NewBytes[] = { 0xEB, 0x10 };
+const unsigned char PatternBytes[] = { 0x56, 0x8B, 0xF1, 0x8B, 0x0D, 0x00, 0x00, 0x00, 0x00, 0x8B, 0x11, 0xFF, 0x92, 0x00, 0x00, 0x00, 0x00, 0x84, 0xC0, 0x74, 0x10 };
 const char PatternMask[] = "xxxxx????xxxx????xxxx";
 
-pointer FindPattern (pointer StartAddress, unsigned int MaxLength, const unsigned char* Bytes, const char* Mask)
+pointer FindPattern(pointer StartAddress, unsigned int MaxLength, const unsigned char* Bytes, const char* Mask)
 {
 	unsigned int i = 0;
-	while(i < MaxLength)
+	while (i < MaxLength)
 	{
 		unsigned int o = 0;
-		while(reinterpret_cast<unsigned char*>(StartAddress + i)[o] == Bytes[o] || Mask[o] == '*')
+		while (reinterpret_cast<unsigned char*>(StartAddress + i)[o] == Bytes[o] || Mask[o] == '*')
 		{
 			o++;
-			if(Mask[o] == 0x0)
+			if (Mask[o] == 0x0)
 			{
 				return StartAddress + i;
 			}
@@ -33,9 +33,9 @@ pointer FindPattern (pointer StartAddress, unsigned int MaxLength, const unsigne
 	return nullptr;
 }
 
-int __stdcall DllMain (void* Module, unsigned long Reason, void*)
+int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 {
-	if(Reason != DLL_PROCESS_ATTACH)
+	if (Reason != DLL_PROCESS_ATTACH)
 	{
 		return 0;
 	}
@@ -43,9 +43,9 @@ int __stdcall DllMain (void* Module, unsigned long Reason, void*)
 	MODULEINFO WoWModuleInfo;
 	GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &WoWModuleInfo, sizeof(MODULEINFO));
 	pointer PatchAddress = FindPattern(WoWModuleInfo.lpBaseOfDll, WoWModuleInfo.SizeOfImage, PatternBytes, PatternMask);
-	if(PatchAddress == nullptr)
+	if (PatchAddress == nullptr)
 	{
-		MessageBox(FindWindow("GxWindowClass", "World of Warcraft"), "Unable to find bytes to patch.", "Failure", MB_OK);
+		MessageBox(FindWindow(L"GxWindowClass", L"World of Warcraft"), L"Unable to find bytes to patch.", L"Failure", MB_OK);
 		return 0;
 	}
 
@@ -57,17 +57,16 @@ int __stdcall DllMain (void* Module, unsigned long Reason, void*)
 	memcpy(PatchAddress, NewBytes, 0x2);
 	VirtualProtect(PatchAddress, 0x2, OldProtection, &OldProtection);
 
-	if(memcmp(NewBytes, PatchAddress, 0x2) != 0)
+	if (memcmp(NewBytes, PatchAddress, 0x2) != 0)
 	{
-		char* Message = new char[100];
-		ZeroMemory(Message, 100);
-		sprintf(Message, "Unable to patch bytes. Error: %d", GetLastError());
-		MessageBox(FindWindow("GxWindowClass", "World of Warcraft"), Message, "Failure", MB_OK);
-		delete[] Message;
+		wchar_t Message[100];
+		ZeroMemory(Message, sizeof(Message));
+		swprintf_s(Message, 100, L"Unable to patch bytes. Error: %d", GetLastError());
+		MessageBox(FindWindow(L"GxWindowClass", L"World of Warcraft"), Message, L"Failure", MB_OK);
 	}
 	else
 	{
-		MessageBox(FindWindow("GxWindowClass", "World of Warcraft"), "Lua unlocked.", "Success", MB_OK);
+		MessageBox(FindWindow(L"GxWindowClass", L"World of Warcraft"), L"Lua unlocked.", L"Success", MB_OK);
 	}
 
 	return 1;
