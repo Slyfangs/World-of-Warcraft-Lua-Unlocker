@@ -3,37 +3,11 @@
 #include <stdio.h>
 #include <fstream>
 #include <iomanip>
-#include <string>
+#include <string.h>
 
 #pragma comment (lib, "Psapi.lib")
 
 #include "Pointer.hpp"
-
-// Logging version - will find CastSpellByName reference and dump surrounding code
-const unsigned char NewBytes[] = { 0xEB, 0x10 };
-
-// Search for a specific byte pattern
-pointer FindPatternSimple(void* StartAddressVoid, unsigned int MaxLength, const unsigned char* Bytes, unsigned int BytesLen)
-{
-	DWORD StartAddress = reinterpret_cast<DWORD>(StartAddressVoid);
-	for (unsigned int i = 0; i < MaxLength - BytesLen; i++)
-	{
-		bool match = true;
-		for (unsigned int j = 0; j < BytesLen; j++)
-		{
-			if (reinterpret_cast<unsigned char*>(StartAddress + i)[j] != Bytes[j])
-			{
-				match = false;
-				break;
-			}
-		}
-		if (match)
-		{
-			return pointer(StartAddress + i);
-		}
-	}
-	return nullptr;
-}
 
 int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 {
@@ -44,65 +18,63 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 
 	const char* LogFile = "C:\\WoW_Lua_Unlocker_Log.txt";
 
-	std::ofstream log(LogFile);
-	log << "=== WoW 3.3.5a Lua Unlocker - Finding CastSpellByName Security Check ===" << std::endl;
-	log << "DLL Injected at: ";
-	SYSTEMTIME st;
-	GetLocalTime(&st);
-	log << st.wHour << ":" << st.wMinute << ":" << st.wSecond << std::endl << std::endl;
-	log.close();
+	std::ofstream logStream(LogFile);
+	logStream << "=== WoW Lua Unlocker - CastSpellByName Search ===" << std::endl;
+	SYSTEMTIME sysTime;
+	GetLocalTime(&sysTime);
+	logStream << "Injected: " << sysTime.wHour << ":" << sysTime.wMinute << ":" << sysTime.wSecond << std::endl << std::endl;
+	logStream.close();
 
-	MODULEINFO WoWModuleInfo;
-	GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &WoWModuleInfo, sizeof(MODULEINFO));
+	MODULEINFO modInfo;
+	GetModuleInformation(GetCurrentProcess(), GetModuleHandle(nullptr), &modInfo, sizeof(MODULEINFO));
 
-	std::ofstream log2(LogFile, std::ios::app);
-	log2 << "WoW Module Info:" << std::endl;
-	log2 << "  Base Address: 0x" << std::hex << reinterpret_cast<DWORD>(WoWModuleInfo.lpBaseOfDll) << std::dec << std::endl;
-	log2 << "  Module Size: " << WoWModuleInfo.SizeOfImage << " bytes" << std::endl;
-	log2 << std::endl;
+	logStream.open(LogFile, std::ios::app);
+	logStream << "Module Base: 0x" << std::hex << (DWORD)modInfo.lpBaseOfDll << std::endl;
+	logStream << "Module Size: 0x" << std::hex << modInfo.SizeOfImage << std::endl << std::endl;
 
-	// Search for "CastSpellByName" string
-	log2 << "=== Searching for 'CastSpellByName' string ===" << std::endl;
-	const unsigned char CastSpellByNamePattern[] = { 'C', 'a', 's', 't', 'S', 'p', 'e', 'l', 'l', 'B', 'y', 'N', 'a', 'm', 'e' };
-	pointer castSpellRef = FindPatternSimple(WoWModuleInfo.lpBaseOfDll, WoWModuleInfo.SizeOfImage, CastSpellByNamePattern, sizeof(CastSpellByNamePattern));
+	// Search for CastSpellByName string
+	BYTE searchBytes[] = { 'C', 'a', 's', 't', 'S', 'p', 'e', 'l', 'l', 'B', 'y', 'N', 'a', 'm', 'e', 0 };
+	DWORD baseAddr = (DWORD)modInfo.lpBaseOfDll;
+	DWORD maxAddr = baseAddr + modInfo.SizeOfImage - 16;
 
-	if (castSpellRef != nullptr)
+	logStream << "Searching for 'CastSpellByName' string..." << std::endl;
+
+	bool foundString = false;
+	for (DWORD currentAddr = baseAddr; currentAddr < maxAddr; currentAddr++)
 	{
-		DWORD castSpellAddr = reinterpret_cast<DWORD>(static_cast<void*>(castSpellRef));
-		DWORD baseAddr = reinterpret_cast<DWORD>(WoWModuleInfo.lpBaseOfDll);
-		DWORD offset = castSpellAddr - baseAddr;
-
-		log2 << "Found 'CastSpellByName' at address: 0x" << std::hex << castSpellAddr << std::dec << std::endl;
-		log2 << "Offset from base: 0x" << std::hex << offset << std::dec << std::endl;
-		log2 << std::endl;
-
-		// Dump 512 bytes before and after for analysis
-		log2 << "=== Context around CastSpellByName (512 bytes before and after) ===" << std::endl;
-		int start = (offset >= 512) ? offset - 512 : 0;
-		int end = (offset + 512 + 15 < WoWModuleInfo.SizeOfImage) ? offset + 512 + 15 : WoWModuleInfo.SizeOfImage;
-
-		for (int i = start; i < end; i++)
+		if (memcmp((void*)currentAddr, searchBytes, 16) == 0)
 		{
-			unsigned char byte = reinterpret_cast<unsigned char*>(baseAddr + i)[0];
-			if (i == offset) log2 << "[";
-			log2 << std::hex << std::setfill('0') << std::setw(2) << (int)byte << " ";
-			if (i == offset + 14) log2 << "]";
-			
-			if ((i - start + 1) % 16 == 0)
-				log2 << std::endl;
+			foundString = true;
+			DWORD offset = currentAddr - baseAddr;
+			logStream << "FOUND at address: 0x" << std::hex << currentAddr << std::endl;
+			logStream << "Offset from base: 0x" << std::hex << offset << std::endl << std::endl;
+
+			// Dump hex context
+			logStream << "Hex dump (512 bytes before and after):" << std::endl;
+			int startOffset = (offset >= 512) ? offset - 512 : 0;
+			int endOffset = (offset + 16 + 512 < modInfo.SizeOfImage) ? offset + 16 + 512 : modInfo.SizeOfImage;
+
+			for (int i = startOffset; i < endOffset; i++)
+			{
+				BYTE b = *(BYTE*)(baseAddr + i);
+				if (i == offset) logStream << "[";
+				logStream << std::hex << std::setfill('0') << std::setw(2) << (int)b << " ";
+				if (i == offset + 15) logStream << "]";
+				if ((i - startOffset + 1) % 16 == 0) logStream << std::endl;
+			}
+			logStream << std::dec << std::endl << std::endl;
+			break;
 		}
-		log2 << std::dec << std::endl << std::endl;
 	}
-	else
+
+	if (!foundString)
 	{
-		log2 << "ERROR: Could not find 'CastSpellByName' string in memory!" << std::endl;
+		logStream << "ERROR: 'CastSpellByName' string not found in module!" << std::endl;
 	}
 
-	log2.close();
+	logStream.close();
 
-	MessageBox(FindWindow(L"GxWindowClass", L"World of Warcraft"), 
-		L"CastSpellByName search complete! Check C:\\WoW_Lua_Unlocker_Log.txt", 
-		L"Debug Mode", MB_OK);
+	MessageBox(nullptr, L"Search complete. Check C:\\WoW_Lua_Unlocker_Log.txt", L"Info", MB_OK);
 
 	return 1;
 }
