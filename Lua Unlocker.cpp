@@ -9,40 +9,6 @@
 
 #include "Pointer.hpp"
 
-// Lua state and related functions
-typedef void* lua_State;
-
-// Original CastSpellByName function at 0x540310
-typedef int(__stdcall *pCastSpellByName)(const char* spellName);
-
-// Function to call CastSpellByID which we know works
-typedef int(__stdcall *pCastSpellByID)(int spellID);
-
-pCastSpellByName OriginalCastSpellByName = (pCastSpellByName)0x540310;
-pCastSpellByID CastSpellByID = (pCastSpellByID)0x53e060;
-
-// Hook function that properly calls the original
-__declspec(naked) int CastSpellByName_Hook()
-{
-	__asm
-	{
-		push ebp
-		mov ebp, esp
-		
-		// EBP+8 = first parameter (spell name string from Lua)
-		mov eax, [ebp + 8]
-		
-		// Just call the original function directly with the spell name
-		// But we need to make sure the stack is set up correctly
-		push eax
-		call dword ptr [OriginalCastSpellByName]
-		add esp, 4
-		
-		pop ebp
-		ret
-	}
-}
-
 int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 {
 	if (Reason != DLL_PROCESS_ATTACH)
@@ -104,6 +70,7 @@ int __stdcall DllMain(void* Module, unsigned long Reason, void*)
 
 	// Enable write access
 	DWORD oldProtect = 0;
+	DWORD newProtect = 0;
 	VirtualProtect((void*)funcAddr, 512, PAGE_EXECUTE_READWRITE, &oldProtect);
 
 	logStream << "Attempting to patch CastSpellByName to return 1 (success)..." << std::endl;
