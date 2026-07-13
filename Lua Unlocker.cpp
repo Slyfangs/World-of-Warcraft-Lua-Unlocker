@@ -2,6 +2,7 @@
 #include <Psapi.h>
 #include <stdio.h>
 #include <fstream>
+#include <iomanip>
 
 #pragma comment (lib, "Psapi.lib")
 
@@ -10,40 +11,20 @@
 // Logging version - will dump memory patterns to a file for analysis
 const unsigned char NewBytes[] = { 0xEB, 0x10 };
 
-pointer FindPattern(pointer StartAddress, unsigned int MaxLength, const unsigned char* Bytes, const char* Mask)
-{
-	unsigned int i = 0;
-	while (i < MaxLength)
-	{
-		unsigned int o = 0;
-		while (reinterpret_cast<unsigned char*>(StartAddress + i)[o] == Bytes[o] || Mask[o] == '*')
-		{
-			o++;
-			if (Mask[o] == 0x0)
-			{
-				return StartAddress + i;
-			}
-		}
-
-		i++;
-	}
-
-	return nullptr;
-}
-
 // Search for sequences containing "74 10" (the conditional jump we're looking for)
-void SearchForJumps(void* StartAddress, unsigned int MaxLength, const char* LogFile)
+void SearchForJumps(void* StartAddressVoid, unsigned int MaxLength, const char* LogFile)
 {
+	DWORD StartAddress = reinterpret_cast<DWORD>(StartAddressVoid);
 	std::ofstream log(LogFile, std::ios::app);
 	log << "=== Scanning for '74 10' conditional jumps ===" << std::endl;
-	log << "Start Address: 0x" << std::hex << reinterpret_cast<DWORD>(StartAddress) << std::dec << std::endl;
+	log << "Start Address: 0x" << std::hex << StartAddress << std::dec << std::endl;
 	log << "Max Length: " << MaxLength << " bytes" << std::endl;
 	log << std::endl;
 
 	int matches = 0;
 	for (unsigned int i = 0; i < MaxLength - 1; i++)
 	{
-		unsigned char* ptr = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(StartAddress) + i);
+		unsigned char* ptr = reinterpret_cast<unsigned char*>(StartAddress + i);
 		if (ptr[0] == 0x74 && ptr[1] == 0x10)
 		{
 			matches++;
@@ -57,7 +38,7 @@ void SearchForJumps(void* StartAddress, unsigned int MaxLength, const char* LogF
 				int start = (i >= 32) ? i - 32 : 0;
 				for (int j = start; j < i + 2 + 32 && j < (int)MaxLength; j++)
 				{
-					unsigned char byte = reinterpret_cast<unsigned char*>(reinterpret_cast<DWORD>(StartAddress) + j)[0];
+					unsigned char byte = reinterpret_cast<unsigned char*>(StartAddress + j)[0];
 					if (j == (int)i) log << "[";
 					log << std::hex << std::setfill('0') << std::setw(2) << (int)byte << " ";
 					if (j == (int)i + 1) log << "]";
